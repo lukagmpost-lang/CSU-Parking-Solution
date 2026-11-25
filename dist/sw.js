@@ -2,7 +2,7 @@
  * Service Worker for CSU Parking - Offline Support
  */
 
-const CACHE_NAME = 'csu-parking-v8';
+const CACHE_NAME = 'csu-parking-v9';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

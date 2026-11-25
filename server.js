@@ -25,7 +25,10 @@ const mimeTypes = {
   '.woff2': 'font/woff2',
 };
 
-const dataStore = createStore(join(__dirname, 'data', 'parking-data.json'));
+const dataFilePath = process.env.DATA_FILE
+  ? resolve(process.env.DATA_FILE)
+  : join(__dirname, 'data', 'parking-data.json');
+const dataStore = createStore(dataFilePath);
 
 async function initializeStore() {
   await dataStore.update(state => {
@@ -88,6 +91,23 @@ function simulateSurfaceLotStatus(lot) {
   
   state.lastUpdate = Date.now();
   return state.status;
+}
+
+function getSurfaceLotAvailability(lot, reports, now = Date.now()) {
+  const state = simulatorState.get(lot.id);
+  const activeReports = reports.filter(report =>
+    report.facilityId === lot.id && report.expiresAt > now
+  );
+  const reportCount = activeReports.filter(report =>
+    report.issueType === 'lot_full' &&
+    report.timestamp <= now &&
+    now - report.timestamp < 30 * 60 * 1000
+  ).length;
+  const hasEventClosure = activeReports.some(report => report.issueType === 'event_closure');
+
+  if (state) state.reportCount = reportCount;
+  const status = hasEventClosure ? STATUS_TYPES.CLOSED : simulateSurfaceLotStatus(lot);
+  return { status, reportCount };
 }
 
 function json(res, status, body) {
@@ -166,14 +186,14 @@ const server = http.createServer(async (req, res) => {
               isLive: true,
             };
           } else {
-            const status = simulateSurfaceLotStatus(facility);
+            const surfaceStatus = getSurfaceLotAvailability(facility, reports);
             availabilityData = {
               type: 'surface',
               facilityId: facility.id,
-              status,
+              status: surfaceStatus.status,
               lastUpdated: new Date().toISOString(),
               isLive: false,
-              reportCount: facilityReports.filter(r => r.issueType === 'lot_full').length,
+              reportCount: surfaceStatus.reportCount,
             };
           }
           
@@ -224,14 +244,14 @@ const server = http.createServer(async (req, res) => {
               isLive: true,
             };
           } else {
-            const status = simulateSurfaceLotStatus(facility);
+            const surfaceStatus = getSurfaceLotAvailability(facility, reports);
             availabilityData = {
               type: 'surface',
               facilityId: facility.id,
-              status,
+              status: surfaceStatus.status,
               lastUpdated: new Date().toISOString(),
               isLive: false,
-              reportCount: facilityReports.filter(r => r.issueType === 'lot_full').length,
+              reportCount: surfaceStatus.reportCount,
             };
           }
         }
@@ -246,7 +266,19 @@ const server = http.createServer(async (req, res) => {
       }
       
       if (method === 'POST' && path === '/api/reports') {
-        const body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+        let body;
+        try {
+          body = JSON.parse((await readBody(req)).toString('utf8') || '{}');
+        } catch {
+          json(res, 400, { error: 'Invalid JSON body' });
+          return;
+        }
+
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+          json(res, 400, { error: 'Invalid request body' });
+          return;
+        }
+
         const { facilityId, issueType, note = '' } = body;
         
         const facility = ALL_FACILITIES.find(f => f.id === facilityId);
@@ -261,50 +293,61 @@ const server = http.createServer(async (req, res) => {
           return;
         }
         
+        if (typeof note !== 'string') {
+          json(res, 400, { error: 'Note must be a string' });
+          return;
+        }
+
         if (note.length > 140) {
           json(res, 400, { error: 'Note must be 140 characters or less' });
           return;
         }
         
-        const state = await dataStore.read();
-        const recentReports = state.reports.filter(r => 
-          Date.now() - r.timestamp < 10 * 60 * 1000
-        );
-        
+        const now = Date.now();
         const report = {
-          id: 'rpt_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 9),
+          id: 'rpt_' + now.toString(36) + Math.random().toString(36).substr(2, 9),
           facilityId,
           issueType,
           note: note.trim(),
-          timestamp: Date.now(),
-          expiresAt: Date.now() + 60 * 60 * 1000,
+          timestamp: now,
+          expiresAt: now + 60 * 60 * 1000,
         };
-        
+
         await dataStore.update(state => {
-          state.reports = state.reports || [];
+          state.reports = Array.isArray(state.reports) ? state.reports : [];
           state.reports.push(report);
-        });
-        
-        if (facility.type === 'surface' && issueType === 'lot_full') {
-          const recentFullReports = state.reports.filter(r => 
+
+          if (facility.type !== 'surface') return;
+
+          const recentFullReports = state.reports.filter(r =>
             r.facilityId === facilityId &&
             r.issueType === 'lot_full' &&
-            Date.now() - r.timestamp < 30 * 60 * 1000
+            r.expiresAt > now &&
+            now - r.timestamp < 30 * 60 * 1000
           ).length;
-          
-          if (recentFullReports >= 2) {
-            const avail = state.availability || {};
-            avail[facilityId] = {
-              type: 'surface',
-              facilityId,
-              status: STATUS_TYPES.FULL,
-              lastUpdated: new Date().toISOString(),
-              isLive: false,
-              reportCount: recentFullReports,
-            };
-            state.availability = avail;
-          }
-        }
+          const hasEventClosure = state.reports.some(r =>
+            r.facilityId === facilityId &&
+            r.issueType === 'event_closure' &&
+            r.expiresAt > now
+          );
+
+          let status = recentFullReports >= 2
+            ? STATUS_TYPES.FULL
+            : recentFullReports === 1
+              ? STATUS_TYPES.FILLING_FAST
+              : STATUS_TYPES.OPEN;
+          if (hasEventClosure) status = STATUS_TYPES.CLOSED;
+
+          state.availability = state.availability || {};
+          state.availability[facilityId] = {
+            type: 'surface',
+            facilityId,
+            status,
+            lastUpdated: new Date(now).toISOString(),
+            isLive: false,
+            reportCount: recentFullReports,
+          };
+        });
         
         json(res, 201, { success: true, report });
         return;
@@ -352,13 +395,14 @@ const server = http.createServer(async (req, res) => {
         }
         
         for (const lot of SURFACE_LOTS) {
-          const status = simulateSurfaceLotStatus(lot);
+          const surfaceStatus = getSurfaceLotAvailability(lot, state.reports || []);
           availability[lot.id] = {
             type: 'surface',
             facilityId: lot.id,
-            status,
+            status: surfaceStatus.status,
             lastUpdated: new Date().toISOString(),
             isLive: false,
+            reportCount: surfaceStatus.reportCount,
           };
         }
         
@@ -416,8 +460,9 @@ await initializeStore();
 
 const port = Number(process.env.PORT || 3000);
 server.listen(port, '0.0.0.0', () => {
-  console.log('CSU Parking server running at http://localhost:' + port);
-  console.log('API available at http://localhost:' + port + '/api/');
+  const actualPort = server.address().port;
+  console.log('CSU Parking server running at http://localhost:' + actualPort);
+  console.log('API available at http://localhost:' + actualPort + '/api/');
 });
 
 setInterval(async () => {
@@ -445,13 +490,14 @@ setInterval(async () => {
   }
   
   for (const lot of SURFACE_LOTS) {
-    const status = simulateSurfaceLotStatus(lot);
+    const surfaceStatus = getSurfaceLotAvailability(lot, state.reports || []);
     availability[lot.id] = {
       type: 'surface',
       facilityId: lot.id,
-      status,
+      status: surfaceStatus.status,
       lastUpdated: new Date().toISOString(),
       isLive: false,
+      reportCount: surfaceStatus.reportCount,
     };
   }
   

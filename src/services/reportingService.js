@@ -5,32 +5,24 @@
 import { ISSUE_TYPES, STATUS_TYPES } from '../data/csuParkingData.js';
 import { updateSurfaceLotStatus } from './availabilityService.js';
 import { getGarages, getSurfaceLots } from '../data/csuParkingData.js';
+import { getFacilityReportSummary, getStoredReports, saveReports } from './reportStore.js';
 
-const STORAGE_KEY = 'csu-parking-reports';
 const COOLDOWN_KEY = 'csu-parking-report-cooldown';
 const COOLDOWN_MS = 10 * 60 * 1000;
 const REPORT_EXPIRY_MS = 60 * 60 * 1000;
 const AUTO_FULL_THRESHOLD = 2;
-const AUTO_FULL_WINDOW_MS = 30 * 60 * 1000;
 
 let reportSubscribers = new Set();
 
-function getStoredReports() {
-  try {
-    const data = localStorage.getItem(STORAGE_KEY);
-    return data ? JSON.parse(data) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveReports(reports) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(reports));
-}
-
 function notifySubscribers() {
   const reports = getActiveReports();
-  reportSubscribers.forEach(callback => callback(reports));
+  reportSubscribers.forEach(callback => {
+    try {
+      callback(reports);
+    } catch (error) {
+      console.error('Report subscriber failed:', error);
+    }
+  });
 }
 
 export function subscribeToReports(callback) {
@@ -40,20 +32,25 @@ export function subscribeToReports(callback) {
 }
 
 export function isInCooldown() {
-  const lastReport = localStorage.getItem(COOLDOWN_KEY);
-  if (!lastReport) return false;
-  return Date.now() - parseInt(lastReport, 10) < COOLDOWN_MS;
+  return getCooldownRemaining() > 0;
 }
 
 export function getCooldownRemaining() {
-  const lastReport = localStorage.getItem(COOLDOWN_KEY);
-  if (!lastReport) return 0;
-  const remaining = COOLDOWN_MS - (Date.now() - parseInt(lastReport, 10));
-  return Math.max(0, remaining);
+  try {
+    const lastReport = Number.parseInt(localStorage.getItem(COOLDOWN_KEY), 10);
+    if (!Number.isFinite(lastReport)) return 0;
+    return Math.max(0, COOLDOWN_MS - (Date.now() - lastReport));
+  } catch {
+    return 0;
+  }
 }
 
 function setCooldown() {
-  localStorage.setItem(COOLDOWN_KEY, Date.now().toString());
+  try {
+    localStorage.setItem(COOLDOWN_KEY, Date.now().toString());
+  } catch {
+    // A successfully saved report should not appear to fail if cooldown storage is unavailable.
+  }
 }
 
 function generateReportId() {
@@ -81,6 +78,10 @@ export function submitReport(reportData) {
     return { success: false, error: 'Invalid issue type' };
   }
   
+  if (typeof note !== 'string') {
+    return { success: false, error: 'Note must be text' };
+  }
+
   if (note.length > 140) {
     return { success: false, error: 'Note must be 140 characters or less' };
   }
@@ -101,7 +102,7 @@ export function submitReport(reportData) {
   
   setCooldown();
   
-  if (validFacility.type === 'surface' && issueType === 'lot_full') {
+  if (validFacility.type === 'surface' && ['lot_full', 'event_closure'].includes(issueType)) {
     checkAutoFull(facilityId);
   }
   
@@ -111,27 +112,29 @@ export function submitReport(reportData) {
 }
 
 function getDeviceId() {
-  let deviceId = localStorage.getItem('csu-parking-device-id');
-  if (!deviceId) {
-    deviceId = 'dev_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
-    localStorage.setItem('csu-parking-device-id', deviceId);
+  try {
+    let deviceId = localStorage.getItem('csu-parking-device-id');
+    if (!deviceId) {
+      deviceId = 'dev_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
+      localStorage.setItem('csu-parking-device-id', deviceId);
+    }
+    return deviceId;
+  } catch {
+    return 'dev_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
   }
-  return deviceId;
 }
 
 function checkAutoFull(facilityId) {
-  const reports = getStoredReports();
-  const now = Date.now();
-  
-  const recentFullReports = reports.filter(r => 
-    r.facilityId === facilityId &&
-    r.issueType === 'lot_full' &&
-    now - r.timestamp < AUTO_FULL_WINDOW_MS
-  ).length;
-  
-  if (recentFullReports >= AUTO_FULL_THRESHOLD) {
-    updateSurfaceLotStatus(facilityId, STATUS_TYPES.FULL);
-  }
+  const { reportCount, hasEventClosure } = getFacilityReportSummary(facilityId);
+
+  let status = reportCount >= AUTO_FULL_THRESHOLD
+    ? STATUS_TYPES.FULL
+    : reportCount === 1
+      ? STATUS_TYPES.FILLING_FAST
+      : STATUS_TYPES.OPEN;
+  if (hasEventClosure) status = STATUS_TYPES.CLOSED;
+
+  updateSurfaceLotStatus(facilityId, status, reportCount);
 }
 
 export function getActiveReports() {
@@ -178,7 +181,18 @@ export function cleanupExpiredReports() {
   const now = Date.now();
   const active = reports.filter(r => r.expiresAt > now);
   if (active.length !== reports.length) {
-    saveReports(active);
+    const expiredSurfaceLots = new Set(
+      reports
+        .filter(r => r.expiresAt <= now && ['lot_full', 'event_closure'].includes(r.issueType))
+        .map(r => r.facilityId)
+        .filter(facilityId => getSurfaceLots().some(lot => lot.id === facilityId))
+    );
+    try {
+      saveReports(active);
+    } catch {
+      return reports.length;
+    }
+    expiredSurfaceLots.forEach(checkAutoFull);
     notifySubscribers();
   }
   return active.length;

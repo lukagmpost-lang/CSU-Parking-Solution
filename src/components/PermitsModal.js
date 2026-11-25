@@ -41,7 +41,7 @@ const PERMIT_BORDER_CLASSES = {
   Visitor: 'border-blue-200',
 };
 
-export function PermitsModal({ onClose }) {
+export function PermitsModal() {
   return `
     <div class="modal-overlay" data-modal="permits" role="dialog" aria-modal="true" aria-labelledby="permits-title">
       <div class="modal-content animate-slide-up">
@@ -71,17 +71,17 @@ export function PermitsModal({ onClose }) {
                 const textColor = PERMIT_TEXT_CLASSES[key] || 'text-gray-700';
                 const borderColor = PERMIT_BORDER_CLASSES[key] || 'border-gray-200';
                 return `
-                  <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                    <div class="flex items-center gap-3">
-                      <div class="w-10 h-10 rounded-lg flex items-center justify-center ${bgColor} border ${borderColor}">
+                  <div class="flex items-center justify-between gap-3 p-4 bg-gray-50 rounded-lg">
+                    <div class="flex items-center gap-3 min-w-0">
+                      <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${bgColor} border ${borderColor}">
                         <div class="w-5 h-5 rounded ${color}"></div>
                       </div>
-                      <div>
-                        <p class="font-medium text-gray-900">${escapeHtml(permit.name)}</p>
+                      <div class="min-w-0">
+                        <p class="font-medium text-gray-900 break-words">${escapeHtml(permit.name)}</p>
                         <p class="text-xs text-gray-500">Per ${permit.period}</p>
                       </div>
                     </div>
-                    <span class="text-lg font-bold text-csu-green">$${permit.price}</span>
+                    <span class="text-lg font-bold text-csu-green whitespace-nowrap flex-shrink-0">$${permit.price}</span>
                   </div>
                 `;
               }).join('')}

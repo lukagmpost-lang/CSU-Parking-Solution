@@ -4,22 +4,13 @@
 
 import './styles.css';
 import { renderApp } from './components/App.js';
-import { startPolling } from './services/availabilityService.js';
-import { cleanupExpiredReports } from './services/reportingService.js';
+import { startPolling, triggerRefresh } from './services/availabilityService.js';
 import { onOnlineStatusChange } from './utils/helpers.js';
 
 startPolling(30000);
 
-// Only one cleanup interval
-setInterval(cleanupExpiredReports, 5 * 60 * 1000);
-
 onOnlineStatusChange((online) => {
-  console.log('App is now ' + (online ? 'online' : 'offline'));
-  if (online) {
-    import('./services/availabilityService.js').then(({ triggerRefresh }) => {
-      triggerRefresh();
-    });
-  }
+  if (online) triggerRefresh();
 });
 
 renderApp();

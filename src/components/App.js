@@ -1,115 +1,192 @@
 /**
- * Main App Component - Orchestrates the entire application with routing
+ * Main App Component - Orchestrates the application and page routing
  */
 
-import { ALL_FACILITIES, GATED_GARAGES, SURFACE_LOTS, PERMIT_TYPES, PERMIT_COLORS } from '../data/csuParkingData.js';
-import { 
-  getAllAvailability, 
-  subscribeToAvailability, 
-  formatAvailability, 
+import { ALL_FACILITIES } from '../data/csuParkingData.js';
+import {
+  subscribeToAvailability,
+  formatAvailability,
   getStatusBadgeVariant,
-  triggerRefresh 
+  triggerRefresh,
 } from '../services/availabilityService.js';
-import { 
-  subscribeToReports, 
-  getActiveReportsForFacility, 
+import {
+  subscribeToReports,
   hasActiveReports,
   getLatestReportForFacility,
   formatTimeAgo,
-  isInCooldown,
-  getCooldownRemaining
 } from '../services/reportingService.js';
-import { 
-  subscribeToSpot, 
-  getSavedSpot, 
-  formatSpot, 
-  clearSpot,
-  getTimerStatus,
-  getDirectionsUrl 
-} from '../services/spotSaverService.js';
-import { 
+import { subscribeToSpot, getTimerStatus } from '../services/spotSaverService.js';
+import {
   createBooking,
   getBookingByCode,
   getUserBooking,
   subscribeToBookings,
   extendBooking,
-  cancelBooking
+  cancelBooking,
 } from '../services/bookingService.js';
-import { 
-  escapeHtml, 
-  formatNumber, 
+import {
+  escapeHtml,
   openDirections,
   vibrate,
-  debounce 
+  debounce,
+  copyToClipboard,
 } from '../utils/helpers.js';
 import { Header } from './Header.js';
 import { FilterBar } from './FilterBar.js';
 import { FacilityList } from './FacilityList.js';
 import { MapView } from './MapView.js';
 import { PermitsModal } from './PermitsModal.js';
-import { ReportModal } from './ReportModal.js';
-import { SpotSaverModal } from './SpotSaverModal.js';
-import { ReservationLookupModal } from './ReservationLookupModal.js';
+import { ReportModal, initReportModal } from './ReportModal.js';
+import { SpotSaverModal, initSpotSaverModal } from './SpotSaverModal.js';
+import { ReservationLookupModal, initReservationLookupModal } from './ReservationLookupModal.js';
 import { BookingPage } from './BookingPage.js';
 import { ConfirmationPage } from './ConfirmationPage.js';
 
 let currentView = 'list';
 let currentPage = 'home';
+let lastRenderedPage = 'home';
+
 let selectedPermit = 'All';
 let showOpenOnly = false;
 let searchQuery = '';
 let filteredFacilities = [...ALL_FACILITIES];
+
 let availabilityData = {};
 let activeReports = {};
 let savedSpot = null;
+
 let permitsModalOpen = false;
 let reportModalOpen = false;
 let reportModalFacilityId = null;
 let spotSaverModalOpen = false;
 let spotSaverModalFacilityId = null;
 let reservationLookupOpen = false;
+
 let bookingPage = null;
 let confirmationPage = null;
 let bookingFacilityId = null;
 let confirmationCode = null;
+
 let isInputFocused = false;
 let isModalOpen = false;
+let modalReturnFocusSelector = null;
+let lastModalType = null;
 
-const debouncedFilter = debounce(applyFilters, 100);
+const debouncedFilter = debounce(applyFilters, 120);
 
-function applyFilters() {
+document.addEventListener('keydown', function (event) {
+  if (event.key !== 'Escape' || !isModalOpen) return;
+  event.preventDefault();
+  closeCurrentModal();
+});
+
+function captureModalTrigger() {
+  const activeElement = document.activeElement;
+  if (!activeElement || activeElement === document.body) {
+    modalReturnFocusSelector = null;
+    return;
+  }
+
+  if (activeElement.id) {
+    modalReturnFocusSelector = '#' + activeElement.id;
+    return;
+  }
+
+  const attributes = ['data-report', 'data-pin-toggle', 'data-open-facility'];
+  const attribute = attributes.find(function (name) { return activeElement.hasAttribute(name); });
+  modalReturnFocusSelector = attribute
+    ? '[' + attribute + '="' + activeElement.getAttribute(attribute) + '"]'
+    : null;
+}
+
+function restoreModalTrigger() {
+  const selector = modalReturnFocusSelector;
+  modalReturnFocusSelector = null;
+  if (!selector) return;
+
+  setTimeout(function () {
+    const trigger = document.querySelector(selector);
+    if (trigger && !trigger.disabled) trigger.focus();
+  }, 0);
+}
+
+function closeCurrentModal() {
+  if (permitsModalOpen) onPermitsModalToggle();
+  else if (reportModalOpen) onReportModalClose();
+  else if (spotSaverModalOpen) onSpotSaverModalClose();
+  else if (reservationLookupOpen) onReservationLookupClose();
+}
+
+function canAutoRenderHome() {
+  return currentPage === 'home' && !isModalOpen && !isInputFocused && !document.hidden;
+}
+
+function getSavedSpotLabel() {
+  if (!savedSpot) return '';
+
+  const facility = ALL_FACILITIES.find(function (item) {
+    return item.id === savedSpot.facilityId;
+  });
+
+  const parts = [];
+  if (facility) parts.push(facility.name);
+  if (savedSpot.floor) parts.push('Level ' + savedSpot.floor);
+  if (savedSpot.row) parts.push('Row ' + savedSpot.row);
+  if (savedSpot.spot) parts.push('Spot ' + savedSpot.spot);
+  if (savedSpot.timer) {
+    const timer = getTimerStatus();
+    if (timer) parts.push(timer.expired ? 'Timer expired' : timer.formatted + ' left');
+  }
+
+  return parts.join(' \u2022 ');
+}
+
+function showToast(message) {
+  const toast = document.createElement('div');
+  toast.textContent = message;
+  toast.setAttribute('role', 'status');
+  toast.className = 'fixed bottom-24 left-1/2 -translate-x-1/2 bg-gray-900 text-white px-4 py-2.5 rounded-xl shadow-lg text-sm z-[60] animate-slide-up max-w-[80vw] text-center';
+  document.body.appendChild(toast);
+  setTimeout(function () {
+    toast.remove();
+  }, 2400);
+}
+
+function applyFilters(shouldRender = true) {
   let facilities = [...ALL_FACILITIES];
-  
+
   if (searchQuery.trim()) {
     const query = searchQuery.toLowerCase().trim();
-    facilities = facilities.filter(f => 
-      f.name.toLowerCase().includes(query) ||
-      f.shortName.toLowerCase().includes(query) ||
-      f.address.toLowerCase().includes(query) ||
-      f.text2ParkZone.toLowerCase().includes(query)
-    );
-  }
-  
-  if (selectedPermit !== 'All') {
-    facilities = facilities.filter(f => f.permits.includes(selectedPermit));
-  }
-  
-  if (showOpenOnly) {
-    facilities = facilities.filter(f => {
-      const avail = availabilityData[f.id];
-      if (!avail) return true;
-      if (avail.type === 'garage') {
-        return avail.spacesAvailable > 0;
-      } else {
-        return avail.status !== 'Full' && avail.status !== 'Closed';
-      }
+    facilities = facilities.filter(function (facility) {
+      return facility.name.toLowerCase().includes(query) ||
+        facility.shortName.toLowerCase().includes(query) ||
+        facility.address.toLowerCase().includes(query) ||
+        facility.text2ParkZone.toLowerCase().includes(query);
     });
   }
-  
-  filteredFacilities = facilities;
-  if (currentPage === 'home') {
-    render();
+
+  if (selectedPermit !== 'All') {
+    facilities = facilities.filter(function (facility) {
+      return facility.permits.includes(selectedPermit);
+    });
   }
+
+  if (showOpenOnly) {
+    facilities = facilities.filter(function (facility) {
+      const availability = availabilityData[facility.id];
+      const hasClosure = (activeReports[facility.id] || []).some(function (report) {
+        return report.issueType === 'event_closure';
+      });
+      if (hasClosure || !availability) return false;
+      if (availability.reservationsRemaining === 0) return false;
+      if (availability.type === 'garage') return availability.spacesAvailable > 0 && availability.status !== 'Closed';
+      return availability.status !== 'Full' && availability.status !== 'Closed';
+    });
+  }
+
+  filteredFacilities = facilities;
+
+  if (shouldRender && currentPage === 'home') render();
 }
 
 function onPermitChange(permit) {
@@ -133,12 +210,14 @@ function onViewChange(view) {
 }
 
 function onDirectionsClick(facility) {
-  vibrate([50]);
+  if (!facility || !facility.coordinates) return;
+  vibrate([40]);
   openDirections(facility.coordinates.lat, facility.coordinates.lng, facility.name);
 }
 
 function onReportClick(facilityId) {
-  vibrate([50]);
+  vibrate([40]);
+  captureModalTrigger();
   reportModalFacilityId = facilityId;
   reportModalOpen = true;
   render();
@@ -148,20 +227,20 @@ function onReportModalClose() {
   reportModalOpen = false;
   reportModalFacilityId = null;
   render();
-}
-
-function onReportModalSubmit() {
-  onReportModalClose();
+  restoreModalTrigger();
 }
 
 function onPermitsModalToggle() {
+  if (!permitsModalOpen) captureModalTrigger();
   permitsModalOpen = !permitsModalOpen;
   render();
+  if (!permitsModalOpen) restoreModalTrigger();
 }
 
-function onSaveSpotClick(facilityId) {
-  vibrate([50]);
-  spotSaverModalFacilityId = facilityId;
+function onSpotSaverClick() {
+  vibrate([40]);
+  captureModalTrigger();
+  spotSaverModalFacilityId = savedSpot ? savedSpot.facilityId : null;
   spotSaverModalOpen = true;
   render();
 }
@@ -170,26 +249,25 @@ function onSpotSaverModalClose() {
   spotSaverModalOpen = false;
   spotSaverModalFacilityId = null;
   render();
+  restoreModalTrigger();
 }
 
 function onSpotSaved() {
   spotSaverModalOpen = false;
   spotSaverModalFacilityId = null;
   render();
-}
-
-function onClearSpot() {
-  clearSpot();
-  render();
+  restoreModalTrigger();
 }
 
 async function onRefreshClick() {
-  vibrate([50]);
+  vibrate([40]);
   await triggerRefresh();
+  if (currentPage === 'home') render();
 }
 
 function onReservationLookupClick() {
-  vibrate([50]);
+  vibrate([40]);
+  captureModalTrigger();
   reservationLookupOpen = true;
   render();
 }
@@ -197,18 +275,25 @@ function onReservationLookupClick() {
 function onReservationLookupClose() {
   reservationLookupOpen = false;
   render();
+  restoreModalTrigger();
 }
 
 function onOpenReservationFromCode(code) {
+  const booking = getBookingByCode(code);
+
+  if (!booking) {
+    showToast('Reservation not found');
+    return;
+  }
+
   reservationLookupOpen = false;
-  confirmationCode = code.toUpperCase().trim();
+  confirmationCode = booking.code;
   currentPage = 'confirmation';
   render();
 }
 
-// Booking flow handlers
 function onOpenFacility(facilityId) {
-  vibrate([50]);
+  vibrate([40]);
   bookingFacilityId = facilityId;
   currentPage = 'booking';
   render();
@@ -217,418 +302,603 @@ function onOpenFacility(facilityId) {
 function onBookingBack() {
   currentPage = 'home';
   bookingFacilityId = null;
-  if (bookingPage) bookingPage = null;
+  bookingPage = null;
   render();
 }
 
-async function onBookingSubmit(data) {
+function onBookingSubmit(data) {
   if (!bookingFacilityId) return;
-  
-  const result = createBooking({
-    facilityId: bookingFacilityId,
-    permitType: data.permitType,
-    durationHours: data.durationHours,
-    vehicleInfo: data.vehicleInfo
-  });
-  
-  if (result.success) {
-    vibrate([50, 50]);
-    confirmationCode = result.booking.code;
-    currentPage = 'confirmation';
-    render();
-  } else {
-    alert(result.error || 'Failed to create booking');
+
+  const availability = availabilityData[bookingFacilityId];
+  const reports = activeReports[bookingFacilityId] || [];
+  let validationError = '';
+
+  if (!availability) validationError = 'Availability is still loading. Please try again in a moment.';
+  else if (reports.some(function (report) { return report.issueType === 'event_closure'; })) {
+    validationError = 'This facility is closed due to an active event report.';
   }
+
+  if (validationError) {
+    if (bookingPage && bookingPage.setSubmitError) bookingPage.setSubmitError(validationError);
+    return;
+  }
+
+  let result;
+  try {
+    result = createBooking({
+      facilityId: bookingFacilityId,
+      permitType: data.permitType,
+      durationHours: data.durationHours,
+      vehicleInfo: data.vehicleInfo,
+      availability: availability,
+    });
+  } catch (error) {
+    result = { success: false, error: 'Could not create the reservation. Please try again.' };
+  }
+
+  if (!result.success) {
+    if (bookingPage && bookingPage.setSubmitError) {
+      bookingPage.setSubmitError(result.error || 'Could not create reservation');
+    } else {
+      if (bookingPage) bookingPage.resetSubmit();
+      showToast(result.error || 'Could not create reservation');
+    }
+    return;
+  }
+
+  vibrate([50, 50]);
+  if (confirmationPage) confirmationPage.stopCountdown();
+  confirmationPage = null;
+  bookingPage = null;
+  confirmationCode = result.booking.code;
+  currentPage = 'confirmation';
+  render();
+}
+
+function stopConfirmation() {
+  if (confirmationPage) confirmationPage.stopCountdown();
+  confirmationPage = null;
 }
 
 function onConfirmationBack() {
-  currentPage = 'home';
+  stopConfirmation();
   confirmationCode = null;
-  if (confirmationPage) {
-    confirmationPage.stopCountdown();
-    confirmationPage = null;
-  }
+  currentPage = 'home';
   render();
 }
 
-function onConfirmationHome() {
-  currentPage = 'home';
-  confirmationCode = null;
-  if (confirmationPage) {
-    confirmationPage.stopCountdown();
-    confirmationPage = null;
-  }
-  render();
+function onCopyCode() {
+  const code = confirmationPage && confirmationPage.getBooking()
+    ? confirmationPage.getBooking().code
+    : confirmationCode;
+
+  if (!code) return;
+
+  copyToClipboard(code).then(function (copied) {
+    showToast(copied ? 'Booking code copied' : 'Could not copy the code');
+  });
 }
 
 function onConfirmationExtend(hours) {
   if (!confirmationCode) return;
+
+  stopConfirmation();
   const result = extendBooking(confirmationCode, hours);
-  if (result.success) {
-    vibrate([50, 50]);
-    confirmationCode = result.booking.code;
-    if (confirmationPage) {
-      confirmationPage.stopCountdown();
-    }
+
+  if (!result.success) {
+    showToast(result.error || 'Could not extend reservation');
     render();
-  } else {
-    alert(result.error || 'Failed to extend booking');
+    return;
   }
+
+  vibrate([50, 50]);
+  const costMessage = result.additionalCost > 0 ? ' for $' + result.additionalCost : ' at no extra charge';
+  showToast('Added ' + hours + ' hour' + (hours === 1 ? '' : 's') + costMessage);
+  render();
 }
 
 function onConfirmationCancel() {
   if (!confirmationCode) return;
-  if (confirm('Cancel this reservation?')) {
-    const result = cancelBooking(confirmationCode);
-    if (result.success) {
-      vibrate([50, 50, 50]);
-      currentPage = 'home';
-      confirmationCode = null;
-      if (confirmationPage) {
-        confirmationPage.stopCountdown();
-        confirmationPage = null;
-      }
-      render();
-    }
+  if (!window.confirm('Cancel this reservation?')) return;
+
+  stopConfirmation();
+  const result = cancelBooking(confirmationCode);
+
+  if (!result.success) {
+    showToast(result.error || 'Could not cancel reservation');
+    render();
+    return;
   }
+
+  vibrate([80, 40, 80]);
+  render();
 }
 
 function onConfirmationRebook() {
-  if (!confirmationCode) return;
-  const booking = getBookingByCode(confirmationCode);
-  if (booking) {
-    bookingFacilityId = booking.facilityId;
-    currentPage = 'booking';
+  const booking = confirmationCode ? getBookingByCode(confirmationCode) : null;
+
+  stopConfirmation();
+
+  if (!booking) {
     confirmationCode = null;
-    if (confirmationPage) {
-      confirmationPage.stopCountdown();
-      confirmationPage = null;
-    }
+    currentPage = 'home';
     render();
+    return;
   }
+
+  bookingFacilityId = booking.facilityId;
+  confirmationCode = null;
+  currentPage = 'booking';
+  render();
+}
+
+function onLookupAnother() {
+  stopConfirmation();
+  confirmationCode = null;
+  modalReturnFocusSelector = '#reservation-lookup-btn';
+  reservationLookupOpen = true;
+  currentPage = 'home';
+  render();
+}
+
+function onConfirmationDone() {
+  onConfirmationBack();
 }
 
 function setupSubscriptions() {
-  // Availability subscription - only re-render home page
-  subscribeToAvailability((data) => {
+  subscribeToAvailability(function (data) {
     availabilityData = data;
-    if (currentPage === 'home' && !isInputFocused && !isModalOpen) {
-      render();
-    }
+    if (currentPage === 'home') applyFilters(false);
+    if (canAutoRenderHome()) render();
   });
-  
-  subscribeToReports((reports) => {
+
+  subscribeToReports(function (reports) {
     activeReports = {};
-    reports.forEach(report => {
-      if (!activeReports[report.facilityId]) {
-        activeReports[report.facilityId] = [];
-      }
+    reports.forEach(function (report) {
+      if (!activeReports[report.facilityId]) activeReports[report.facilityId] = [];
       activeReports[report.facilityId].push(report);
     });
-    if (currentPage === 'home' && !isInputFocused && !isModalOpen) {
-      render();
-    }
+    if (currentPage === 'home') applyFilters(false);
+    if (canAutoRenderHome()) render();
   });
-  
-  subscribeToSpot((spot) => {
+
+  subscribeToSpot(function (spot) {
     savedSpot = spot;
-    if (currentPage === 'home' && !isInputFocused && !isModalOpen) {
-      render();
-    }
+    if (canAutoRenderHome()) render();
   });
-  
-  // Booking subscription - don't auto-render, we handle it explicitly
-  subscribeToBookings(() => {
+
+  subscribeToBookings(function () {
+    triggerRefresh();
     if (currentPage === 'confirmation' && confirmationPage) {
-      // Reload booking data but don't full re-render
       confirmationPage.loadBooking();
-      if (confirmationPage.getBooking()) {
-        // Update UI elements directly instead of full render
-        const booking = confirmationPage.getBooking();
-        const timeEl = document.getElementById('time-remaining');
-        if (timeEl) timeEl.textContent = formatTimeAgo(booking.expiresAt);
-      }
     }
   });
 }
 
 function render() {
+  isModalOpen = permitsModalOpen || reportModalOpen || spotSaverModalOpen || reservationLookupOpen;
+  document.body.classList.toggle('modal-open', isModalOpen);
+
   const app = document.getElementById('app');
-  
+  const samePage = lastRenderedPage === currentPage;
+  const scrollY = samePage ? window.scrollY : 0;
+
+  const activeElement = document.activeElement;
+  const restoreSearch = samePage && currentPage === 'home' && activeElement && activeElement.id === 'search-input';
+  const caretPosition = restoreSearch ? activeElement.selectionStart : null;
+
   let pageContent = '';
   let pageHeader = '';
-  
+
   if (currentPage === 'booking') {
-    const facility = ALL_FACILITIES.find(f => f.id === bookingFacilityId);
-    if (facility) {
-      bookingPage = BookingPage({
-        facility,
-        onBack: onBookingBack,
-        onSubmit: onBookingSubmit
-      });
-      pageContent = bookingPage.render();
-      pageHeader = `
-        <header class="sticky-header">
-          <div class="max-w-md mx-auto px-4">
-            <div class="flex items-center justify-between h-16">
-              <button type="button" class="btn-ghost p-2" data-action="back" aria-label="Back">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
-              </button>
-              <div class="flex-1 text-center">
-                <h1 class="text-lg font-semibold text-gray-900">Reserve Spot</h1>
-                <p class="text-xs text-gray-500">${escapeHtml(facility.name)}</p>
-              </div>
-              <div class="w-10"></div>
-            </div>
-          </div>
-        </header>
-      `;
-    } else {
+    const facility = ALL_FACILITIES.find(function (item) {
+      return item.id === bookingFacilityId;
+    });
+
+    if (!facility) {
       currentPage = 'home';
       bookingFacilityId = null;
+      render();
+      return;
     }
+
+    bookingPage = BookingPage({
+      facility: facility,
+      onSubmit: onBookingSubmit,
+    });
+
+    pageContent = bookingPage.render();
+    pageHeader =
+      '<header class="sticky-header">' +
+        '<div class="max-w-md mx-auto px-4">' +
+          '<div class="flex items-center justify-between h-16">' +
+            '<button type="button" class="btn-ghost p-2" data-action="back" aria-label="Back to parking">' +
+              '<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>' +
+            '</button>' +
+            '<div class="flex-1 text-center min-w-0 px-2">' +
+              '<h1 class="text-lg font-semibold text-gray-900">Reserve Spot</h1>' +
+              '<p class="text-xs text-gray-500 truncate">' + escapeHtml(facility.name) + '</p>' +
+            '</div>' +
+            '<div class="w-10"></div>' +
+          '</div>' +
+        '</div>' +
+      '</header>';
   } else if (currentPage === 'confirmation') {
+    stopConfirmation();
+
     confirmationPage = ConfirmationPage({
       code: confirmationCode,
-      onBack: onConfirmationBack,
-      onHome: onConfirmationHome
+      onExpire: function (expiredCode) {
+        if (currentPage !== 'confirmation' || confirmationCode !== expiredCode) return;
+        stopConfirmation();
+        triggerRefresh();
+        render();
+      },
     });
-    if (confirmationPage.loadBooking()) {
-      confirmationPage.startCountdown();
-      setTimeout(() => confirmationPage.initQR(), 100);
-    }
+    confirmationPage.loadBooking();
     pageContent = confirmationPage.render();
-    pageHeader = `
-      <header class="sticky-header">
-        <div class="max-w-md mx-auto px-4">
-          <div class="flex items-center justify-between h-16">
-            <button type="button" class="btn-ghost p-2" data-action="confirmation-back" aria-label="Back">
-              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
-            </button>
-            <div class="flex-1 text-center">
-              <h1 class="text-lg font-semibold text-gray-900">Your Reservation</h1>
-              <p class="text-xs text-gray-500">${confirmationPage.getBooking()?.facilityName || ''}</p>
-            </div>
-            <button type="button" class="btn-ghost p-2" data-action="confirmation-home" aria-label="Home">
-              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 011-1v4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
-            </button>
-          </div>
-        </div>
-      </header>
-    `;
+
+    const booking = confirmationPage.getBooking();
+
+    pageHeader =
+      '<header class="sticky-header">' +
+        '<div class="max-w-md mx-auto px-4">' +
+          '<div class="flex items-center justify-between h-16">' +
+            '<button type="button" class="btn-ghost p-2" data-action="confirmation-back" aria-label="Back to parking">' +
+              '<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>' +
+            '</button>' +
+            '<div class="flex-1 text-center min-w-0 px-2">' +
+              '<h1 class="text-lg font-semibold text-gray-900">Your Reservation</h1>' +
+              '<p class="text-xs text-gray-500 truncate">' + escapeHtml(booking ? booking.facilityName : '') + '</p>' +
+            '</div>' +
+            '<div class="w-10" aria-hidden="true"></div>' +
+          '</div>' +
+        '</div>' +
+      '</header>';
   } else {
-    // Home page
     const header = Header({
       onPermitsClick: onPermitsModalToggle,
-      onRefreshClick,
+      onRefreshClick: onRefreshClick,
       permitsOpen: permitsModalOpen,
-      onReservationLookupClick,
+      onReservationLookupClick: onReservationLookupClick,
       hasSavedBooking: !!getUserBooking(),
     });
-    
+
     const filterBar = FilterBar({
-      selectedPermit,
-      onPermitChange,
-      showOpenOnly,
-      onOpenOnlyChange,
-      searchQuery,
-      onSearchChange,
-      currentView,
-      onViewChange,
+      selectedPermit: selectedPermit,
+      onPermitChange: onPermitChange,
+      showOpenOnly: showOpenOnly,
+      onOpenOnlyChange: onOpenOnlyChange,
+      searchQuery: searchQuery,
+      onSearchChange: onSearchChange,
+      currentView: currentView,
+      onViewChange: onViewChange,
       facilityCount: filteredFacilities.length,
       totalCount: ALL_FACILITIES.length,
+      onSpotSaverClick: onSpotSaverClick,
+      hasSavedSpot: !!savedSpot,
+      savedSpotLabel: getSavedSpotLabel(),
     });
-    
+
     let mainContent;
     if (currentView === 'map') {
       mainContent = MapView({
         facilities: filteredFacilities,
-        availabilityData,
-        activeReports,
-        onDirectionsClick,
-        onReportClick,
-        onOpenFacility,
+        availabilityData: availabilityData,
+        activeReports: activeReports,
       });
     } else {
       mainContent = FacilityList({
         facilities: filteredFacilities,
-        availabilityData,
-        activeReports,
-        onDirectionsClick,
-        onReportClick,
-        onOpenFacility,
-        formatAvailability,
-        getStatusBadgeVariant,
-        hasActiveReports: (id) => hasActiveReports(id),
-        getLatestReportForFacility,
-        formatTimeAgo,
+        availabilityData: availabilityData,
+        activeReports: activeReports,
+        formatAvailability: formatAvailability,
+        getStatusBadgeVariant: getStatusBadgeVariant,
+        hasActiveReports: function (id) { return hasActiveReports(id); },
+        getLatestReportForFacility: getLatestReportForFacility,
+        formatTimeAgo: formatTimeAgo,
       });
     }
-    
+
     pageHeader = header + filterBar;
     pageContent = mainContent;
   }
-  
-  isModalOpen = permitsModalOpen || reportModalOpen || spotSaverModalOpen || reservationLookupOpen;
-  
-  app.innerHTML = `
-    <div class="min-h-screen bg-gray-50 flex flex-col">
-      ${pageHeader}
-      <main class="flex-1 overflow-auto ${currentPage === 'home' ? 'pb-24' : 'pb-8 px-4'}">
-        ${pageContent}
-      </main>
-      ${currentPage === 'home' && permitsModalOpen ? PermitsModal({ onClose: onPermitsModalToggle }) : ''}
-      ${currentPage === 'home' && reportModalOpen ? ReportModal({ 
-        facilityId: reportModalFacilityId,
-        onClose: onReportModalClose,
-        onSubmit: onReportModalSubmit,
-      }) : ''}
-      ${currentPage === 'home' && spotSaverModalOpen ? SpotSaverModal({ 
-        facilityId: spotSaverModalFacilityId,
-        onClose: onSpotSaverModalClose,
-        onSave: onSpotSaved,
-      }) : ''}
-      ${currentPage === 'home' && reservationLookupOpen ? ReservationLookupModal({ 
-        onClose: onReservationLookupClose,
-        onOpenBooking: onOpenReservationFromCode,
-      }) : ''}
-    </div>
-  `;
-  
-  attachEventListeners();
-  
+
+  const modalHtml =
+    (currentPage === 'home' && permitsModalOpen ? PermitsModal() : '') +
+    (currentPage === 'home' && reportModalOpen ? ReportModal({
+      facilityId: reportModalFacilityId,
+      onClose: onReportModalClose,
+      onSubmit: onReportModalClose,
+    }) : '') +
+    (currentPage === 'home' && spotSaverModalOpen ? SpotSaverModal({
+      facilityId: spotSaverModalFacilityId,
+      onClose: onSpotSaverModalClose,
+      onSave: onSpotSaved,
+    }) : '') +
+    (currentPage === 'home' && reservationLookupOpen ? ReservationLookupModal() : '');
+
+  app.innerHTML =
+    '<div class="min-h-screen bg-gray-50 flex flex-col">' +
+      pageHeader +
+      '<main class="flex-1 px-4 pb-[calc(2.5rem+env(safe-area-inset-bottom,0px))]">' + pageContent + '</main>' +
+      modalHtml +
+    '</div>';
+
+  if (isModalOpen) {
+    app.querySelectorAll('header, main, .filter-bar').forEach(function (element) {
+      element.inert = true;
+      element.setAttribute('aria-hidden', 'true');
+    });
+  }
+
+  attachEventListeners(app);
+
   if (currentPage === 'booking' && bookingPage) {
-    const container = document.querySelector('[data-booking-page]');
-    if (container) bookingPage.init(container);
+    const bookingContainer = app.querySelector('[data-booking-page]');
+    if (bookingContainer) bookingPage.init(bookingContainer);
   }
-  
+
   if (currentPage === 'confirmation' && confirmationPage) {
-    setTimeout(() => confirmationPage.initQR(), 100);
+    confirmationPage.startCountdown();
+    confirmationPage.initQR();
   }
-  
-  // Initialize modals
+
+  initModals(app);
+  initModalAccessibility(app);
+
+  if (restoreSearch) {
+    const searchInput = app.querySelector('#search-input');
+    if (searchInput) {
+      searchInput.focus();
+      if (caretPosition !== null && caretPosition !== undefined) {
+        try {
+          searchInput.setSelectionRange(caretPosition, caretPosition);
+        } catch (error) {
+          // Search inputs in some browsers do not support selection ranges.
+        }
+      }
+    }
+  }
+
+  window.scrollTo(0, samePage ? scrollY : 0);
+  lastRenderedPage = currentPage;
+}
+
+function initModals(app) {
+  if (permitsModalOpen) {
+    const permitsModal = app.querySelector('[data-modal="permits"]');
+    if (permitsModal) {
+      permitsModal.querySelectorAll('[data-modal-close="permits"]').forEach(function (button) {
+        button.addEventListener('click', onPermitsModalToggle);
+      });
+      permitsModal.addEventListener('click', function (event) {
+        if (event.target === permitsModal) onPermitsModalToggle();
+      });
+    }
+  }
+
   if (reportModalOpen) {
-    const container = document.querySelector('[data-modal="report"]');
-    if (container) {
-      import('./ReportModal.js').then(module => {
-        module.initReportModal(container, {
-          onClose: onReportModalClose,
-          onSubmit: onReportModalSubmit,
-        });
-      });
-    }
+    initReportModal(app, {
+      onClose: onReportModalClose,
+      onSubmit: onReportModalClose,
+    });
   }
-  
+
   if (spotSaverModalOpen) {
-    const container = document.querySelector('[data-modal="spot-saver"]');
-    if (container) {
-      import('./SpotSaverModal.js').then(module => {
-        module.initSpotSaverModal(container, {
-          onClose: onSpotSaverModalClose,
-          onSave: onSpotSaved,
-        });
-      });
-    }
+    initSpotSaverModal(app, {
+      onClose: onSpotSaverModalClose,
+      onSave: onSpotSaved,
+    });
+  }
+
+  if (reservationLookupOpen) {
+    initReservationLookupModal(app, {
+      onClose: onReservationLookupClose,
+      onOpenBooking: onOpenReservationFromCode,
+    });
   }
 }
 
-function attachEventListeners() {
-  if (currentPage === 'home') {
-    const permitsBtn = document.getElementById('permits-btn');
-    if (permitsBtn) permitsBtn.onclick = onPermitsModalToggle;
-    
-    const refreshBtn = document.getElementById('refresh-btn');
-    if (refreshBtn) refreshBtn.onclick = onRefreshClick;
-    
-    const lookupBtn = document.getElementById('reservation-lookup-btn');
-    if (lookupBtn) lookupBtn.onclick = onReservationLookupClick;
-    
-    document.querySelectorAll('[data-permit]').forEach(btn => {
-      btn.onclick = () => onPermitChange(btn.dataset.permit);
+function initModalAccessibility(app) {
+  const modal = app.querySelector('.modal-overlay');
+  const modalType = modal ? modal.dataset.modal : null;
+  const isNewModal = modalType && modalType !== lastModalType;
+  lastModalType = modalType;
+
+  if (!modal) return;
+
+  function getFocusableElements() {
+    return Array.from(modal.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter(function (element) {
+      return element.getAttribute('aria-hidden') !== 'true' && element.getClientRects().length > 0;
     });
-    
-    const openOnlyToggle = document.getElementById('open-only-toggle');
-    if (openOnlyToggle) openOnlyToggle.onchange = (e) => onOpenOnlyChange(e.target.checked);
-    
-    const searchInput = document.getElementById('search-input');
-    if (searchInput) {
-      searchInput.oninput = (e) => onSearchChange(e.target.value);
-      searchInput.onfocus = () => { isInputFocused = true; };
-      searchInput.onblur = () => { isInputFocused = false; };
+  }
+
+  modal.addEventListener('keydown', function (event) {
+    if (event.key !== 'Tab') return;
+
+    const focusableElements = getFocusableElements();
+    if (focusableElements.length === 0) {
+      event.preventDefault();
+      return;
     }
-    
-    document.querySelectorAll('[data-view]').forEach(btn => {
-      btn.onclick = () => onViewChange(btn.dataset.view);
+
+    const firstElement = focusableElements[0];
+    const lastElement = focusableElements[focusableElements.length - 1];
+
+    if (event.shiftKey && document.activeElement === firstElement) {
+      event.preventDefault();
+      lastElement.focus();
+    } else if (!event.shiftKey && document.activeElement === lastElement) {
+      event.preventDefault();
+      firstElement.focus();
+    }
+  });
+
+  if (isNewModal) {
+    setTimeout(function () {
+      if (!modal.isConnected) return;
+      const initialFocus = modal.querySelector('[data-initial-focus]') || getFocusableElements()[0];
+      if (initialFocus) initialFocus.focus();
+    }, 0);
+  }
+}
+
+function attachEventListeners(app) {
+  if (currentPage === 'home') {
+    const permitsButton = app.querySelector('#permits-btn');
+    if (permitsButton) permitsButton.addEventListener('click', onPermitsModalToggle);
+
+    const refreshButton = app.querySelector('#refresh-btn');
+    if (refreshButton) refreshButton.addEventListener('click', onRefreshClick);
+
+    const lookupButton = app.querySelector('#reservation-lookup-btn');
+    if (lookupButton) lookupButton.addEventListener('click', onReservationLookupClick);
+
+    const spotButton = app.querySelector('#spot-saver-btn');
+    if (spotButton) spotButton.addEventListener('click', onSpotSaverClick);
+
+    app.querySelectorAll('[data-permit]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        onPermitChange(button.dataset.permit);
+      });
     });
-    
-    document.querySelectorAll('[data-directions]').forEach(btn => {
-      btn.onclick = () => {
-        const facilityId = btn.dataset.directions;
-        const facility = ALL_FACILITIES.find(f => f.id === facilityId);
+
+    const openOnlyToggle = app.querySelector('#open-only-toggle');
+    if (openOnlyToggle) {
+      openOnlyToggle.addEventListener('change', function (event) {
+        onOpenOnlyChange(event.target.checked);
+      });
+    }
+
+    const searchInput = app.querySelector('#search-input');
+    if (searchInput) {
+      searchInput.addEventListener('input', function (event) {
+        onSearchChange(event.target.value);
+      });
+      searchInput.addEventListener('focus', function () {
+        isInputFocused = true;
+      });
+      searchInput.addEventListener('blur', function () {
+        isInputFocused = false;
+      });
+    }
+
+    app.querySelectorAll('[data-view]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        onViewChange(button.dataset.view);
+      });
+    });
+
+    const mapContainer = app.querySelector('#map-container');
+    if (mapContainer) {
+      function closePinTooltips() {
+        app.querySelectorAll('.map-pin.pin-open').forEach(function (pin) {
+          pin.classList.remove('pin-open');
+          const toggle = pin.querySelector('[data-pin-toggle]');
+          if (toggle) toggle.setAttribute('aria-expanded', 'false');
+        });
+      }
+
+      app.querySelectorAll('[data-pin-toggle]').forEach(function (button) {
+        button.addEventListener('click', function (event) {
+          event.stopPropagation();
+          const pin = button.closest('.map-pin');
+          if (!pin) return;
+
+          const wasOpen = pin.classList.contains('pin-open');
+          closePinTooltips();
+
+          if (!wasOpen) {
+            pin.classList.add('pin-open');
+            button.setAttribute('aria-expanded', 'true');
+          }
+        });
+      });
+
+      mapContainer.addEventListener('click', function (event) {
+        if (event.target === mapContainer) closePinTooltips();
+      });
+
+      mapContainer.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') closePinTooltips();
+      });
+    }
+
+    app.querySelectorAll('[data-directions]').forEach(function (button) {
+      button.addEventListener('click', function (event) {
+        event.stopPropagation();
+        const facility = ALL_FACILITIES.find(function (item) {
+          return item.id === button.dataset.directions;
+        });
         if (facility) onDirectionsClick(facility);
-      };
+      });
     });
-    
-    document.querySelectorAll('[data-report]').forEach(btn => {
-      btn.onclick = () => onReportClick(btn.dataset.report);
+
+    app.querySelectorAll('[data-report]').forEach(function (button) {
+      button.addEventListener('click', function (event) {
+        event.stopPropagation();
+        onReportClick(button.dataset.report);
+      });
     });
-    
-    document.querySelectorAll('[data-open-facility]').forEach(btn => {
-      btn.onclick = () => onOpenFacility(btn.dataset.openFacility);
-    });
-    
-    const clearSpotBtn = document.getElementById('clear-spot-btn');
-    if (clearSpotBtn) clearSpotBtn.onclick = onClearSpot;
-    
-    document.querySelectorAll('[data-modal-close]').forEach(btn => {
-      btn.onclick = () => {
-        const modal = btn.dataset.modalClose;
-        if (modal === 'permits') onPermitsModalToggle();
-        else if (modal === 'report') onReportModalClose();
-        else if (modal === 'spot-saver') onSpotSaverModalClose();
-        else if (modal === 'reservation-lookup') onReservationLookupClose();
-      };
-    });
-    
-    document.querySelectorAll('.modal-overlay').forEach(overlay => {
-      overlay.onclick = (e) => {
-        if (e.target === overlay) {
-          const modal = overlay.dataset.modal;
-          if (modal === 'permits') onPermitsModalToggle();
-          else if (modal === 'report') onReportModalClose();
-          else if (modal === 'spot-saver') onSpotSaverModalClose();
-          else if (modal === 'reservation-lookup') onReservationLookupClose();
-        }
-      };
+
+    app.querySelectorAll('[data-open-facility]').forEach(function (button) {
+      button.addEventListener('click', function (event) {
+        event.stopPropagation();
+        onOpenFacility(button.dataset.openFacility);
+      });
     });
   }
-  
+
   if (currentPage === 'booking') {
-    document.querySelectorAll('[data-action="back"]').forEach(btn => {
-      btn.onclick = onBookingBack;
+    app.querySelectorAll('[data-action="back"]').forEach(function (button) {
+      button.addEventListener('click', onBookingBack);
     });
   }
-  
+
   if (currentPage === 'confirmation') {
-    document.querySelectorAll('[data-action="confirmation-back"]').forEach(btn => {
-      btn.onclick = onConfirmationBack;
+    app.querySelectorAll('[data-action="confirmation-back"]').forEach(function (button) {
+      button.addEventListener('click', onConfirmationBack);
     });
-    document.querySelectorAll('[data-action="confirmation-home"]').forEach(btn => {
-      btn.onclick = onConfirmationHome;
+
+    const copyButton = app.querySelector('[data-action="copy-code"]');
+    if (copyButton) copyButton.addEventListener('click', onCopyCode);
+
+    app.querySelectorAll('[data-action="extend"]').forEach(function (button) {
+      button.addEventListener('click', function () {
+        onConfirmationExtend(parseInt(button.dataset.hours, 10));
+      });
     });
-    
-    window.addEventListener('confirmation-extend', (e) => onConfirmationExtend(e.detail), { once: true });
-    window.addEventListener('confirmation-cancel', onConfirmationCancel, { once: true });
-    window.addEventListener('confirmation-rebook', onConfirmationRebook, { once: true });
-    
-    window.addEventListener('beforeunload', () => {
-      if (confirmationPage) confirmationPage.stopCountdown();
-    }, { once: true });
+
+    const cancelButton = app.querySelector('[data-action="cancel-booking"]');
+    if (cancelButton) cancelButton.addEventListener('click', onConfirmationCancel);
+
+    const rebookButton = app.querySelector('[data-action="rebook"]');
+    if (rebookButton) rebookButton.addEventListener('click', onConfirmationRebook);
+
+    const doneButton = app.querySelector('[data-action="done"]');
+    if (doneButton) doneButton.addEventListener('click', onConfirmationDone);
+
+    const lookupAgainButton = app.querySelector('[data-action="lookup-again"]');
+    if (lookupAgainButton) lookupAgainButton.addEventListener('click', onLookupAnother);
   }
 }
 
 export function renderApp() {
+  const shortcutParams = new URLSearchParams(window.location.search);
+  if (shortcutParams.get('report') === 'true') reportModalOpen = true;
+  else if (shortcutParams.get('save-spot') === 'true') spotSaverModalOpen = true;
+
+  if (reportModalOpen || spotSaverModalOpen) {
+    window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+  }
+
   setupSubscriptions();
   applyFilters();
-  render();
+
+  setInterval(function () {
+    if (savedSpot?.timer && canAutoRenderHome()) render();
+  }, 30000);
 }

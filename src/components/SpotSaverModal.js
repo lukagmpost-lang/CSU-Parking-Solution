@@ -3,9 +3,8 @@
  */
 
 import { ALL_FACILITIES, getFacilityById } from '../data/csuParkingData.js';
-import { escapeHtml, formatDurationMinutes } from '../utils/helpers.js';
-import { vibrate } from '../utils/helpers.js';
-import { saveSpot, getSavedSpot } from '../services/spotSaverService.js';
+import { escapeHtml, formatDurationMinutes, vibrate } from '../utils/helpers.js';
+import { saveSpot, getSavedSpot, clearSpot } from '../services/spotSaverService.js';
 
 export function SpotSaverModal({ facilityId, onClose, onSave }) {
   const facility = facilityId ? getFacilityById(facilityId) : null;
@@ -41,11 +40,11 @@ export function SpotSaverModal({ facilityId, onClose, onSave }) {
         
         <form id="spot-saver-form" class="p-6 space-y-5 max-h-[70vh] overflow-y-auto">
           <div>
-            <label class="input-label">Parking Facility *</label>
-            <select name="facilityId" class="input-field" required>
+            <label class="input-label" for="spot-facility">Parking Facility *</label>
+            <select name="facilityId" id="spot-facility" class="input-field" required>
               ${ALL_FACILITIES.map(f => `
                 <option value="${f.id}" ${defaultFacility.id === f.id ? 'selected' : ''}>
-                  ${escapeHtml(f.name)} (${escapeHtml(f.shortName)})
+                  ${escapeHtml(f.name)}
                 </option>
               `).join('')}
             </select>
@@ -57,6 +56,7 @@ export function SpotSaverModal({ facilityId, onClose, onSave }) {
               <input
                 type="text"
                 name="floor"
+                aria-label="Floor or level"
                 value="${escapeHtml(defaultFloor)}"
                 placeholder="e.g., 3"
                 class="input-field"
@@ -68,6 +68,7 @@ export function SpotSaverModal({ facilityId, onClose, onSave }) {
               <input
                 type="text"
                 name="row"
+                aria-label="Parking row"
                 value="${escapeHtml(defaultRow)}"
                 placeholder="e.g., B"
                 class="input-field"
@@ -79,6 +80,7 @@ export function SpotSaverModal({ facilityId, onClose, onSave }) {
               <input
                 type="text"
                 name="spot"
+                aria-label="Parking spot number"
                 value="${escapeHtml(defaultSpot)}"
                 placeholder="e.g., 12"
                 class="input-field"
@@ -92,6 +94,7 @@ export function SpotSaverModal({ facilityId, onClose, onSave }) {
             <input
               type="text"
               name="notes"
+              aria-label="Parking spot notes"
               value="${escapeHtml(defaultNotes)}"
               placeholder="e.g., Near elevator, blue pillar"
               class="input-field"
@@ -103,10 +106,10 @@ export function SpotSaverModal({ facilityId, onClose, onSave }) {
             <div class="flex items-center justify-between mb-4">
               <div>
                 <p class="font-medium text-gray-900">Parking Timer</p>
-                <p class="text-sm text-gray-500">Get reminded before your meter/Text2Park expires</p>
+                <p class="text-sm text-gray-500">Track time left on your meter/Text2Park session</p>
               </div>
               <label class="toggle-switch">
-                <input type="checkbox" name="startTimer" id="timer-toggle" ${defaultTimer ? 'checked' : ''}>
+                <input type="checkbox" name="startTimer" id="timer-toggle" aria-label="Track parking time" ${defaultTimer ? 'checked' : ''}>
                 <span class="switch-track">
                   <span class="switch-thumb"></span>
                 </span>
@@ -154,11 +157,11 @@ export function SpotSaverModal({ facilityId, onClose, onSave }) {
                 </p>
               </div>
               
-              <div class="flex gap-2">
+              <div class="grid grid-cols-3 gap-2">
                 ${[30, 60, 120, 180, 240].map(min => `
                   <button
                     type="button"
-                    class="filter-chip flex-1 ${defaultDuration === min ? 'filter-chip-active' : ''}"
+                    class="filter-chip ${defaultDuration === min ? 'filter-chip-active' : ''}"
                     data-quick-duration="${min}"
                   >
                     ${formatDurationMinutes(min)}
@@ -168,13 +171,23 @@ export function SpotSaverModal({ facilityId, onClose, onSave }) {
             </div>
           </div>
           
-          <div class="pt-2">
+          <div class="pt-2 space-y-3">
+            <p id="spot-saver-error" class="text-sm text-red-600 hidden" role="alert"></p>
             <button
               type="submit"
               class="btn-primary w-full"
             >
               ${isEditing ? 'Update Spot' : 'Save Spot'}
             </button>
+            ${isEditing ? `
+              <button
+                type="button"
+                id="clear-spot"
+                class="btn-secondary w-full text-red-600 border-red-200 hover:bg-red-50"
+              >
+                Clear Saved Spot
+              </button>
+            ` : ''}
           </div>
         </form>
       </div>
@@ -186,6 +199,7 @@ export function initSpotSaverModal(container, { onClose, onSave }) {
   const modal = container.querySelector('[data-modal="spot-saver"]');
   if (!modal) return;
 
+  const editing = !!getSavedSpot();
   const form = modal.querySelector('#spot-saver-form');
   const timerToggle = modal.querySelector('#timer-toggle');
   const timerOptions = modal.querySelector('#timer-options');
@@ -199,7 +213,7 @@ export function initSpotSaverModal(container, { onClose, onSave }) {
   modal.querySelectorAll('[data-timer-adjust]').forEach(btn => {
     btn.addEventListener('click', () => {
       const adjust = parseInt(btn.dataset.timerAdjust, 10);
-      let newVal = parseInt(durationInput.value, 10) + adjust;
+      let newVal = (parseInt(durationInput.value, 10) || 120) + adjust;
       newVal = Math.max(15, Math.min(720, newVal));
       newVal = Math.round(newVal / 15) * 15;
       durationInput.value = newVal;
@@ -238,6 +252,8 @@ export function initSpotSaverModal(container, { onClose, onSave }) {
     const durationMinutes = startTimer ? parseInt(durationInput.value, 10) : 0;
 
     const submitBtn = form.querySelector('button[type="submit"]');
+    const errorEl = modal.querySelector('#spot-saver-error');
+    if (errorEl) errorEl.classList.add('hidden');
     submitBtn.disabled = true;
     submitBtn.textContent = 'Saving...';
 
@@ -247,10 +263,22 @@ export function initSpotSaverModal(container, { onClose, onSave }) {
       onSave();
     } catch (error) {
       submitBtn.disabled = false;
-      submitBtn.textContent = isEditing ? 'Update Spot' : 'Save Spot';
-      alert('Failed to save spot');
+      submitBtn.textContent = editing ? 'Update Spot' : 'Save Spot';
+      if (errorEl) {
+        errorEl.textContent = error.message || 'Failed to save spot. Please try again.';
+        errorEl.classList.remove('hidden');
+      }
     }
   });
+
+  const clearBtn = modal.querySelector('#clear-spot');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', function () {
+      clearSpot();
+      vibrate([40, 40]);
+      onSave();
+    });
+  }
 
   modal.querySelectorAll('[data-modal-close="spot-saver"]').forEach(btn => {
     btn.addEventListener('click', onClose);

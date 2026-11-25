@@ -29,36 +29,57 @@ export function getSavedSpot() {
 
 export function saveSpot(spotData) {
   const { facilityId, floor, row, spot, notes = '', startTimer = false, durationMinutes = 120 } = spotData;
-  
+
+  if (!getFacilityById(facilityId)) throw new Error('Choose a valid parking facility.');
+  if (typeof notes !== 'string' || notes.trim().length > 140) throw new Error('Notes must be 140 characters or less.');
+  if (startTimer && (!Number.isInteger(durationMinutes) || durationMinutes < 15 || durationMinutes > 720)) {
+    throw new Error('Timer duration must be between 15 and 720 minutes.');
+  }
+
+  const now = Date.now();
+  const duration = startTimer ? durationMinutes * 60 * 1000 : 0;
+  const previousSpot = getSavedSpot();
+  const canPreserveTimer = startTimer && previousSpot?.timer &&
+    previousSpot.facilityId === facilityId &&
+    previousSpot.timer.duration === duration && previousSpot.timer.expiresAt > now;
+
   const savedSpot = {
     facilityId,
     floor: floor || null,
     row: row?.toUpperCase() || null,
     spot: spot || null,
     notes: notes.trim(),
-    savedAt: Date.now(),
-    timer: startTimer ? {
-      duration: durationMinutes * 60 * 1000,
-      startedAt: Date.now(),
-      expiresAt: Date.now() + (durationMinutes * 60 * 1000),
-    } : null,
+    savedAt: now,
+    timer: startTimer ? (canPreserveTimer ? previousSpot.timer : {
+      duration,
+      startedAt: now,
+      expiresAt: now + duration,
+    }) : null,
   };
-  
+
   localStorage.setItem(STORAGE_KEY, JSON.stringify(savedSpot));
   
-  if (startTimer) {
-    localStorage.setItem(TIMER_KEY, JSON.stringify(savedSpot.timer));
-  } else {
-    localStorage.removeItem(TIMER_KEY);
+  try {
+    if (startTimer) {
+      localStorage.setItem(TIMER_KEY, JSON.stringify(savedSpot.timer));
+    } else {
+      localStorage.removeItem(TIMER_KEY);
+    }
+  } catch {
+    // The saved spot is the source of truth; the legacy timer key is best-effort.
   }
-  
+
   notifySubscribers();
   return savedSpot;
 }
 
 export function clearSpot() {
   localStorage.removeItem(STORAGE_KEY);
-  localStorage.removeItem(TIMER_KEY);
+  try {
+    localStorage.removeItem(TIMER_KEY);
+  } catch {
+    // The legacy timer key is best-effort; the saved spot has already cleared.
+  }
   notifySubscribers();
 }
 

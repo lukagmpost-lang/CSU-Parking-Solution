@@ -4,100 +4,100 @@
     "cg": {
       "type": "garage",
       "facilityId": "cg",
-      "spacesAvailable": 475,
+      "spacesAvailable": 394,
       "maxCapacity": 785,
-      "percentage": 61,
+      "percentage": 50,
       "status": "Open",
-      "lastUpdated": "2026-11-25T02:56:17.540Z",
+      "lastUpdated": "2026-11-25T15:10:53.992Z",
       "isLive": true
     },
     "wg": {
       "type": "garage",
       "facilityId": "wg",
-      "spacesAvailable": 272,
+      "spacesAvailable": 71,
       "maxCapacity": 530,
-      "percentage": 51,
-      "status": "Open",
-      "lastUpdated": "2026-11-25T02:56:17.540Z",
+      "percentage": 13,
+      "status": "Filling Fast",
+      "lastUpdated": "2026-11-25T15:10:53.992Z",
       "isLive": true
     },
     "sg": {
       "type": "garage",
       "facilityId": "sg",
-      "spacesAvailable": 299,
+      "spacesAvailable": 291,
       "maxCapacity": 530,
-      "percentage": 56,
+      "percentage": 55,
       "status": "Open",
-      "lastUpdated": "2026-11-25T02:56:17.540Z",
+      "lastUpdated": "2026-11-25T15:10:53.992Z",
       "isLive": true
     },
     "eg": {
       "type": "garage",
       "facilityId": "eg",
-      "spacesAvailable": 48,
+      "spacesAvailable": 94,
       "maxCapacity": 350,
-      "percentage": 14,
-      "status": "Filling Fast",
-      "lastUpdated": "2026-11-25T02:56:17.540Z",
+      "percentage": 27,
+      "status": "Open",
+      "lastUpdated": "2026-11-25T15:10:53.992Z",
       "isLive": true
     },
     "pg": {
       "type": "garage",
       "facilityId": "pg",
-      "spacesAvailable": 157,
+      "spacesAvailable": 54,
       "maxCapacity": 230,
-      "percentage": 68,
+      "percentage": 23,
       "status": "Open",
-      "lastUpdated": "2026-11-25T02:56:17.540Z",
+      "lastUpdated": "2026-11-25T15:10:53.992Z",
       "isLive": true
     },
     "lot21": {
       "type": "surface",
       "facilityId": "lot21",
       "status": "Open",
-      "lastUpdated": "2026-11-25T02:56:17.540Z",
+      "lastUpdated": "2026-11-25T15:10:53.992Z",
       "isLive": false
     },
     "lot22": {
       "type": "surface",
       "facilityId": "lot22",
-      "status": "Open",
-      "lastUpdated": "2026-11-25T02:56:17.540Z",
+      "status": "Filling Fast",
+      "lastUpdated": "2026-11-25T15:10:53.992Z",
       "isLive": false
     },
     "lot40": {
       "type": "surface",
       "facilityId": "lot40",
       "status": "Open",
-      "lastUpdated": "2026-11-25T02:56:17.540Z",
+      "lastUpdated": "2026-11-25T15:10:53.992Z",
       "isLive": false
     },
     "lot54": {
       "type": "surface",
       "facilityId": "lot54",
       "status": "Open",
-      "lastUpdated": "2026-11-25T02:56:17.540Z",
+      "lastUpdated": "2026-11-25T15:10:53.992Z",
       "isLive": false
     },
     "lot65": {
       "type": "surface",
       "facilityId": "lot65",
       "status": "Open",
-      "lastUpdated": "2026-11-25T02:56:17.540Z",
+      "lastUpdated": "2026-11-25T15:10:53.992Z",
       "isLive": false
     },
     "lot66": {
       "type": "surface",
       "facilityId": "lot66",
       "status": "Open",
-      "lastUpdated": "2026-11-25T02:56:17.540Z",
+      "lastUpdated": "2026-11-25T15:10:53.992Z",
       "isLive": false
     },
     "lot70": {
       "type": "surface",
       "facilityId": "lot70",
       "status": "Open",
-      "lastUpdated": "2026-11-25T02:56:17.540Z",
+      "lastUpdated": "2026-11-25T15:10:53.992Z",
       "isLive": false
     }
   }

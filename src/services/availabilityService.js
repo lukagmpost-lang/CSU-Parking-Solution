@@ -3,7 +3,8 @@
  */
 
 import { GATED_GARAGES, SURFACE_LOTS, STATUS_TYPES } from '../data/csuParkingData.js';
-import { getAllBookings } from './bookingService.js';
+import { getAllBookings, getReservationLimit } from './bookingService.js';
+import { getFacilityReportSummary } from './reportStore.js';
 
 let availabilityCache = new Map();
 let subscribers = new Set();
@@ -33,7 +34,13 @@ function notifySubscribers() {
   availabilityCache.forEach((value, key) => {
     result[key] = value;
   });
-  subscribers.forEach(callback => callback(result));
+  subscribers.forEach(callback => {
+    try {
+      callback(result);
+    } catch (error) {
+      console.error('Availability subscriber failed:', error);
+    }
+  });
 }
 
 export function getAllAvailability() {
@@ -82,9 +89,14 @@ function simulateSurfaceLotStatus(lot) {
   const state = simulatorState.get(lot.id);
   if (!state) return STATUS_TYPES.OPEN;
 
-  if (state.reportCount >= 2) {
+  const { reportCount, hasEventClosure } = getFacilityReportSummary(lot.id);
+  state.reportCount = reportCount;
+
+  if (hasEventClosure) {
+    state.status = STATUS_TYPES.CLOSED;
+  } else if (reportCount >= 2) {
     state.status = STATUS_TYPES.FULL;
-  } else if (state.reportCount === 1) {
+  } else if (reportCount === 1) {
     state.status = STATUS_TYPES.FILLING_FAST;
   } else {
     const rand = Math.random();
@@ -92,7 +104,7 @@ function simulateSurfaceLotStatus(lot) {
     else if (rand < 0.9) state.status = STATUS_TYPES.FILLING_FAST;
     else state.status = STATUS_TYPES.FULL;
   }
-  
+
   state.lastUpdate = Date.now();
   return state.status;
 }
@@ -150,7 +162,6 @@ async function refreshAvailability() {
       const garage = GATED_GARAGES.find(g => g.id === id);
       if (garage) {
         const activeReservations = getActiveReservationsCount(id);
-        const rawSpaces = spaces + activeReservations;
         const percentage = Math.round((spaces / garage.maxCapacity) * 100);
         availabilityCache.set(id, {
           type: 'garage',
@@ -158,11 +169,12 @@ async function refreshAvailability() {
           spacesAvailable: spaces,
           maxCapacity: garage.maxCapacity,
           percentage,
-          status: spaces > garage.maxCapacity * 0.2 ? STATUS_TYPES.OPEN : 
+          status: percentage >= 20 ? STATUS_TYPES.OPEN :
                   spaces > 0 ? STATUS_TYPES.FILLING_FAST : STATUS_TYPES.FULL,
           lastUpdated: timestamp,
           isLive: true,
           activeReservations,
+          reservationsRemaining: Math.max(0, getReservationLimit(garage) - activeReservations),
         });
       }
     });
@@ -172,6 +184,7 @@ async function refreshAvailability() {
       if (lot) {
         const state = simulatorState.get(id);
         const reportCount = state ? state.reportCount : 0;
+        const activeReservations = getActiveReservationsCount(id);
         availabilityCache.set(id, {
           type: 'surface',
           facilityId: id,
@@ -179,6 +192,8 @@ async function refreshAvailability() {
           lastUpdated: timestamp,
           isLive: false,
           reportCount,
+          activeReservations,
+          reservationsRemaining: Math.max(0, getReservationLimit(lot) - activeReservations),
         });
       }
     });
@@ -196,10 +211,11 @@ export function startPolling(intervalMs = 30000) {
   
   pollingInterval = setInterval(refreshAvailability, intervalMs);
   
+  // Simulate quietly. The UI is notified by the 30-second refresh (or a manual refresh)
+  // so the home screen does not get rebuilt every 5 seconds.
   simulatorInterval = setInterval(() => {
     GATED_GARAGES.forEach(garage => simulateGarageAvailability(garage));
     SURFACE_LOTS.forEach(lot => simulateSurfaceLotStatus(lot));
-    notifySubscribers();
   }, 5000);
 }
 
@@ -218,15 +234,19 @@ export async function triggerRefresh() {
   await refreshAvailability();
 }
 
-export function updateSurfaceLotStatus(lotId, status) {
+export function updateSurfaceLotStatus(lotId, status, reportCount) {
   const lot = SURFACE_LOTS.find(l => l.id === lotId);
   if (!lot) return;
   
   const state = simulatorState.get(lotId) || { reportCount: 0 };
-  state.reportCount = (state.reportCount || 0) + 1;
+  state.reportCount = Number.isInteger(reportCount)
+    ? Math.max(0, reportCount)
+    : (state.reportCount || 0) + 1;
+  state.status = status;
   state.lastUpdate = Date.now();
   simulatorState.set(lotId, state);
-  
+
+  const activeReservations = getActiveReservationsCount(lotId);
   availabilityCache.set(lotId, {
     type: 'surface',
     facilityId: lotId,
@@ -234,6 +254,8 @@ export function updateSurfaceLotStatus(lotId, status) {
     lastUpdated: new Date().toISOString(),
     isLive: false,
     reportCount: state.reportCount,
+    activeReservations,
+    reservationsRemaining: Math.max(0, getReservationLimit(lot) - activeReservations),
   });
   
   notifySubscribers();
@@ -266,6 +288,7 @@ export function formatAvailability(availability) {
       spacesAvailable,
       maxCapacity,
       activeReservations: availability.activeReservations || 0,
+      reservationsRemaining: availability.reservationsRemaining,
     };
   } else {
     return {
@@ -274,10 +297,12 @@ export function formatAvailability(availability) {
       isLive: availability.isLive,
       lastUpdated: availability.lastUpdated,
       reportCount: availability.reportCount,
+      activeReservations: availability.activeReservations || 0,
+      reservationsRemaining: availability.reservationsRemaining,
       type: 'surface',
-      spacesAvailable: availability.status === STATUS_TYPES.FULL ? 0 : Math.floor(Math.random() * 20) + 1,
+      spacesAvailable: 0,
       maxCapacity: 0,
-      percentage: availability.status === STATUS_TYPES.FULL ? 0 : 50,
+      percentage: 0,
     };
   }
 }

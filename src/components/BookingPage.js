@@ -2,241 +2,318 @@
  * BookingPage Component - Reserve a parking spot
  */
 
-import { escapeHtml, formatDuration, formatTimeRemaining } from '../utils/helpers.js';
+import { escapeHtml } from '../utils/helpers.js';
 import { PERMIT_TYPES, PERMIT_PRICING, PERMIT_RULES } from '../data/csuParkingData.js';
-import { validatePermitForFacility, calculatePrice } from '../services/bookingService.js';
+import { calculatePrice, validatePermitForFacility } from '../services/bookingService.js';
 
-export function BookingPage({ facility, onBack, onSubmit }) {
+const DURATIONS = [1, 2, 4, 8, 12, 24];
+
+export function BookingPage({ facility, onSubmit }) {
   let selectedDuration = 4;
   let selectedPermit = PERMIT_TYPES.VISITOR;
   let vehicleInfo = '';
   let isSubmitting = false;
+  let container = null;
 
-  function getPermitWarning(permitType, facility) {
-    const rules = PERMIT_RULES[permitType];
-    if (!rules) return null;
-
-    const warnings = [];
-
-    if (rules.validFacilities === 'garages' && facility.type === 'surface') {
-      warnings.push(rules.name + ' not valid for surface lots');
-    }
-    if (rules.validFacilities === 'surface' && facility.type === 'garage') {
-      warnings.push(rules.name + ' only valid for surface lots');
-    }
-
-    if (rules.timeRestriction) {
-      const now = new Date();
-      const currentHour = now.getHours() + now.getMinutes() / 60;
-      if (currentHour < rules.timeRestriction.start) {
-        const startHour = Math.floor(rules.timeRestriction.start);
-        const startMin = Math.round((rules.timeRestriction.start % 1) * 60);
-        let startStr = startHour + ':' + startMin.toString().padStart(2, '0') + ' ' + (startHour >= 12 ? 'PM' : 'AM');
-        startStr = startStr.replace('00 PM', 'PM').replace('00 AM', 'AM');
-        warnings.push(rules.name + ' only valid after ' + startStr);
-      }
-    }
-
-    return warnings.length > 0 ? warnings : null;
+  function getRules(permitType) {
+    return PERMIT_RULES[permitType] || null;
   }
 
-  function isPermitCompatible(permitType, facility) {
-    const rules = PERMIT_RULES[permitType];
+  function isPermitCompatible(permitType) {
+    const rules = getRules(permitType);
     if (!rules) return false;
     if (rules.validFacilities === 'all') return true;
-    if (rules.validFacilities === 'garages' && facility.type === 'garage') return true;
-    if (rules.validFacilities === 'surface' && facility.type === 'surface') return true;
+    if (rules.validFacilities === 'garages') return facility.type === 'garage';
+    if (rules.validFacilities === 'surface') return facility.type === 'surface';
     return false;
+  }
+
+  function getPermitWarnings(permitType) {
+    if (!getRules(permitType)) return ['This permit is not recognized'];
+
+    const validation = validatePermitForFacility(permitType, facility, selectedDuration);
+    return validation.valid ? [] : [validation.reason];
   }
 
   function getPrice(hours) {
     return calculatePrice(facility, selectedPermit, hours);
   }
 
-  function render() {
-    const hourlyRate = facility.hourlyRate || (facility.type === 'garage' ? 4 : 3);
-    const dailyMax = facility.dailyMax || (facility.type === 'garage' ? 24 : 18);
-    const currentPrice = getPrice(selectedDuration);
-    const permitWarnings = getPermitWarning(selectedPermit, facility);
-    const permitRules = PERMIT_RULES[selectedPermit];
-
-    let warningHtml = '';
-    if (permitWarnings) {
-      warningHtml = '<div class="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">';
-      warningHtml += '<div class="flex items-start gap-2">';
-      warningHtml += '<svg class="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>';
-      warningHtml += '<div class="flex-1 min-w-0">';
-      permitWarnings.forEach(function(w) {
-        warningHtml += '<p class="text-xs text-amber-800">' + escapeHtml(w) + '</p>';
-      });
-      warningHtml += '</div></div></div>';
+  function getRateLabel() {
+    if (selectedPermit === PERMIT_TYPES.VISITOR) {
+      return '$' + (facility.hourlyRate || (facility.type === 'garage' ? 4 : 3)) + '/hr';
     }
-
-    let permitButtonsHtml = '';
-    Object.entries(PERMIT_TYPES).filter(function(pair) {
-      return facility.permits.includes(PERMIT_TYPES[pair[0]]);
-    }).forEach(function(pair) {
-      var key = pair[0];
-      var value = pair[1];
-      var rules = PERMIT_RULES[key];
-      var isSelected = selectedPermit === PERMIT_TYPES[key];
-      var compatible = isPermitCompatible(PERMIT_TYPES[key], facility);
-
-      var btnClass = 'permit-btn px-3 py-3 rounded-xl border-2 text-center transition-all duration-200 ' +
-        (isSelected ? 'border-csu-green bg-csu-green/5 text-csu-green' : 'border-gray-200 hover:border-gray-300') +
-        (!compatible ? ' opacity-50 cursor-not-allowed' : '');
-
-      var disabledAttr = !compatible ? 'disabled' : '';
-
-      permitButtonsHtml += '<button type="button" class="' + btnClass + '" data-permit="' + PERMIT_TYPES[key] + '" ' + disabledAttr + ' title="' + escapeHtml(rules.description) + '">';
-      permitButtonsHtml += '<p class="font-medium text-sm">' + value + '</p>';
-      permitButtonsHtml += '<p class="text-xs text-gray-500 mt-0.5">' + escapeHtml(rules.description) + '</p>';
-      permitButtonsHtml += '</button>';
-    });
-
-    let durationButtonsHtml = '';
-    [1, 2, 4, 8, 12, 24].forEach(function(hours) {
-      var isSelected = selectedDuration === hours;
-      var price = getPrice(hours);
-      var label = hours === 1 ? '1 Hour' : hours === 24 ? '24 Hours' : hours + ' Hours';
-      durationButtonsHtml += '<button type="button" class="duration-btn px-3 py-3 rounded-xl border-2 text-center transition-all duration-200 ' + (isSelected ? 'border-csu-green bg-csu-green/5 text-csu-green' : 'border-gray-200 hover:border-gray-300') + '" data-duration="' + hours + '">';
-      durationButtonsHtml += '<p class="font-medium text-sm">' + label + '</p>';
-      durationButtonsHtml += '<p class="text-xs text-gray-500 mt-0.5">$' + price + '</p>';
-      durationButtonsHtml += '</button>';
-    });
-
-    return '<div class="min-h-screen bg-gray-50 flex flex-col" data-booking-page>' +
-      '<main class="flex-1 overflow-auto pb-24 max-w-md mx-auto w-full px-4 py-4">' +
-        '<div class="facility-card mb-4">' +
-          '<div class="flex items-center gap-3 mb-3">' +
-            '<div class="w-12 h-12 bg-csu-green/10 rounded-xl flex items-center justify-center">' +
-              '<svg class="w-6 h-6 text-csu-green" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
-                '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/>' +
-              '</svg>' +
-            '</div>' +
-            '<div>' +
-              '<h2 class="font-semibold text-gray-900">' + escapeHtml(facility.name) + '</h2>' +
-              '<p class="text-sm text-gray-500">' + escapeHtml(facility.address) + '</p>' +
-            '</div>' +
-          '</div>' +
-          '<div class="grid grid-cols-3 gap-3 text-center">' +
-            '<div class="p-3 bg-gray-50 rounded-xl">' +
-              '<p class="text-2xl font-bold text-csu-green" id="price-display">' + currentPrice + '</p>' +
-              '<p class="text-xs text-gray-500">Total</p>' +
-            '</div>' +
-            '<div class="p-3 bg-gray-50 rounded-xl">' +
-              '<p class="text-2xl font-bold text-gray-900" id="duration-display">' + selectedDuration + 'h</p>' +
-              '<p class="text-xs text-gray-500">Duration</p>' +
-            '</div>' +
-            '<div class="p-3 bg-gray-50 rounded-xl">' +
-              '<p class="text-2xl font-bold text-gray-900" id="rate-display">$' + hourlyRate + '/hr</p>' +
-              '<p class="text-xs text-gray-500">Rate</p>' +
-            '</div>' +
-          '</div>' +
-        '</div>' +
-        '<div class="facility-card mb-4">' +
-          '<h3 class="font-semibold text-gray-900 mb-3">Duration</h3>' +
-          '<div class="grid grid-cols-3 gap-2" id="duration-buttons">' +
-            durationButtonsHtml +
-          '</div>' +
-        '</div>' +
-        '<div class="facility-card mb-4">' +
-          '<h3 class="font-semibold text-gray-900 mb-3">Permit Type</h3>' +
-          warningHtml +
-          '<div class="grid grid-cols-2 gap-2" id="permit-buttons">' +
-            permitButtonsHtml +
-          '</div>' +
-          (permitRules && permitRules.description ? '<p class="text-xs text-gray-500 mt-2 text-center">' + escapeHtml(permitRules.description) + '</p>' : '') +
-        '</div>' +
-        '<div class="facility-card mb-4">' +
-          '<h3 class="font-semibold text-gray-900 mb-3">Vehicle Info (Optional)</h3>' +
-          '<input type="text" id="vehicle-input" placeholder="License plate, color, make/model" value="" class="input-field" maxlength="50">' +
-          '<p class="text-xs text-gray-500 mt-2">Helps enforcement identify your vehicle</p>' +
-        '</div>' +
-        '<div class="mx-4 mb-6">' +
-          '<button type="button" id="confirm-booking" class="btn-primary w-full" ' + (isPermitCompatible(selectedPermit, facility) ? '' : 'disabled') + '>' +
-            (selectedPermit === PERMIT_TYPES.VISITOR ? 'Reserve Spot for $' + currentPrice : 'Reserve Spot (Permit Holder)') +
-          '</button>' +
-        '</div>' +
-      '</main>' +
-    '</div>';
+    return 'Prepaid';
   }
 
-  function init(container) {
-    var self = this;
-
-    function updateUI() {
-      container.querySelectorAll('#duration-buttons button').forEach(function(btn) {
-        var hours = parseInt(btn.dataset.duration, 10);
-        var isSelected = hours === selectedDuration;
-        btn.className = 'duration-btn px-3 py-3 rounded-xl border-2 text-center transition-all duration-200 ' + (isSelected ? 'border-csu-green bg-csu-green/5 text-csu-green' : 'border-gray-200 hover:border-gray-300');
-      });
-
-      container.querySelectorAll('#permit-buttons button').forEach(function(btn) {
-        var isSelected = btn.dataset.permit === selectedPermit;
-        var compatible = isPermitCompatible(btn.dataset.permit, facility);
-        btn.className = 'permit-btn px-3 py-3 rounded-xl border-2 text-center transition-all duration-200 ' + (isSelected ? 'border-csu-green bg-csu-green/5 text-csu-green' : 'border-gray-200 hover:border-gray-300') + (!compatible ? ' opacity-50 cursor-not-allowed' : '');
-      });
-
-      var priceDisplay = container.querySelector('#price-display');
-      var durationDisplay = container.querySelector('#duration-display');
-      var submitBtn = container.querySelector('#confirm-booking');
-
-      if (priceDisplay) priceDisplay.textContent = getPrice(selectedDuration);
-      if (durationDisplay) durationDisplay.textContent = selectedDuration + 'h';
-      if (submitBtn) {
-        submitBtn.textContent = (selectedPermit === PERMIT_TYPES.VISITOR ? 'Reserve Spot for $' + getPrice(selectedDuration) : 'Reserve Spot (Permit Holder)');
-        submitBtn.disabled = !isPermitCompatible(selectedPermit, facility) || isSubmitting;
-      }
+  function getPermitPricingNote() {
+    const pricing = PERMIT_PRICING[selectedPermit];
+    if (!pricing || selectedPermit === PERMIT_TYPES.VISITOR) {
+      const dailyMax = facility.dailyMax || (facility.type === 'garage' ? 24 : 18);
+      return 'Estimated visitor parking is capped at $' + dailyMax + ' per day. Pay on-site; no online payment is collected.';
     }
+    if (pricing.price === 0) {
+      return pricing.name + ' — no charge with a valid placard.';
+    }
+    return pricing.name + ' costs $' + pricing.price + ' per ' + pricing.period + ', already prepaid. $0 is due on-site.';
+  }
 
-    container.querySelectorAll('#duration-buttons button').forEach(function(btn) {
-      btn.addEventListener('click', function() {
+  function getWarningsHtml() {
+    const warnings = getPermitWarnings(selectedPermit);
+    if (warnings.length === 0) return '';
+
+    let html = '<div class="p-3 bg-amber-50 border border-amber-200 rounded-xl">';
+    html += '<div class="flex items-start gap-2">';
+    html += '<svg class="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>';
+    html += '<div class="flex-1 min-w-0">';
+    warnings.forEach(function (warning) {
+      html += '<p class="text-xs text-amber-800">' + escapeHtml(warning) + '</p>';
+    });
+    html += '</div></div></div>';
+    return html;
+  }
+
+  function getPermitButtonsHtml() {
+    let html = '';
+
+    Object.entries(PERMIT_TYPES).forEach(function (pair) {
+      const name = pair[1];
+      if (!facility.permits.includes(name)) return;
+
+      const rules = getRules(name);
+      const pricing = PERMIT_PRICING[name];
+      const isSelected = selectedPermit === name;
+      const compatible = isPermitCompatible(name);
+
+      const btnClass = 'permit-btn px-3 py-3 rounded-xl border-2 text-left transition-all duration-200 ' +
+        (isSelected ? 'border-csu-green bg-csu-green/5 text-csu-green' : 'border-gray-200 hover:border-gray-300') +
+        (!compatible ? ' opacity-60' : '');
+
+      let priceLine = '';
+      if (pricing && pricing.price !== undefined) {
+        priceLine = pricing.price === 0 ? '$0' : '$' + pricing.price + '/' + pricing.period;
+      } else if (pricing && pricing.priceRange) {
+        priceLine = pricing.priceRange;
+      }
+
+      html += '<button type="button" class="' + btnClass + '" data-permit="' + escapeHtml(name) + '" aria-pressed="' + isSelected + '">';
+      html += '<p class="font-semibold text-sm">' + escapeHtml(name) + '</p>';
+      html += '<p class="text-xs text-gray-500 mt-1">' + escapeHtml(rules ? rules.description : '') + '</p>';
+      if (priceLine) {
+        html += '<p class="text-xs font-medium mt-1 ' + (isSelected ? 'text-csu-green' : 'text-gray-700') + '">' + escapeHtml(priceLine) + '</p>';
+      }
+      html += '</button>';
+    });
+
+    return html;
+  }
+
+  function getDurationButtonsHtml() {
+    let html = '';
+
+    DURATIONS.forEach(function (hours) {
+      const isSelected = selectedDuration === hours;
+      const price = getPrice(hours);
+      const priceLabel = selectedPermit === PERMIT_TYPES.VISITOR ? '$' + price : 'Covered';
+      const label = hours === 1 ? '1 Hour' : hours === 24 ? '24 Hours' : hours + ' Hours';
+
+      html += '<button type="button" class="duration-btn px-3 py-3 rounded-xl border-2 text-center transition-all duration-200 ' +
+        (isSelected ? 'border-csu-green bg-csu-green/5 text-csu-green' : 'border-gray-200 hover:border-gray-300') +
+        '" data-duration="' + hours + '" aria-pressed="' + isSelected + '">';
+      html += '<p class="font-semibold text-sm">' + label + '</p>';
+      html += '<p class="text-xs text-gray-500 mt-1">' + priceLabel + '</p>';
+      html += '</button>';
+    });
+
+    return html;
+  }
+
+  function render() {
+    return '<form class="max-w-md mx-auto py-4" data-booking-page id="booking-form" novalidate>' +
+      '<div class="facility-card mb-4">' +
+        '<div class="flex items-center gap-3 mb-4">' +
+          '<div class="w-12 h-12 bg-csu-green/10 rounded-xl flex items-center justify-center flex-shrink-0">' +
+            '<svg class="w-6 h-6 text-csu-green" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/></svg>' +
+          '</div>' +
+          '<div class="min-w-0">' +
+            '<h2 class="font-semibold text-gray-900">' + escapeHtml(facility.name) + '</h2>' +
+            '<p class="text-sm text-gray-500">' + escapeHtml(facility.address) + '</p>' +
+          '</div>' +
+        '</div>' +
+        '<div class="grid grid-cols-3 gap-3 text-center">' +
+          '<div class="p-3 bg-gray-50 rounded-xl">' +
+            '<p class="text-2xl font-bold text-csu-green">$<span id="price-display">' + getPrice(selectedDuration) + '</span></p>' +
+            '<p class="text-xs text-gray-500 mt-1">Estimated cost</p>' +
+          '</div>' +
+          '<div class="p-3 bg-gray-50 rounded-xl">' +
+            '<p class="text-2xl font-bold text-gray-900" id="duration-display">' + selectedDuration + 'h</p>' +
+            '<p class="text-xs text-gray-500 mt-1">Duration</p>' +
+          '</div>' +
+          '<div class="p-3 bg-gray-50 rounded-xl">' +
+            '<p class="text-lg font-bold text-gray-900 leading-8" id="rate-display">' + getRateLabel() + '</p>' +
+            '<p class="text-xs text-gray-500 mt-1">Rate</p>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+
+      '<div class="facility-card mb-4">' +
+        '<h3 class="font-semibold text-gray-900 mb-3">Duration</h3>' +
+        '<div class="grid grid-cols-3 gap-2" id="duration-buttons">' + getDurationButtonsHtml() + '</div>' +
+      '</div>' +
+
+      '<div class="facility-card mb-4">' +
+        '<h3 class="font-semibold text-gray-900 mb-3">Permit Type</h3>' +
+        '<div id="permit-warning" class="mb-3">' + getWarningsHtml() + '</div>' +
+        '<div class="grid grid-cols-2 gap-2" id="permit-buttons">' + getPermitButtonsHtml() + '</div>' +
+        '<p id="permit-note" class="text-xs text-gray-500 mt-3">' + escapeHtml(getPermitPricingNote()) + '</p>' +
+      '</div>' +
+
+      '<div class="facility-card mb-4">' +
+        '<h3 class="font-semibold text-gray-900 mb-3" id="vehicle-label">Vehicle Info <span class="font-normal text-gray-400">(optional)</span></h3>' +
+        '<input type="text" id="vehicle-input" aria-labelledby="vehicle-label" placeholder="License plate, color, make/model" value="' + escapeHtml(vehicleInfo) + '" class="input-field" maxlength="50">' +
+        '<p class="text-xs text-gray-500 mt-2">Helps enforcement identify your vehicle.</p>' +
+      '</div>' +
+
+      '<p id="booking-error" class="text-sm text-red-600 mb-3 hidden" role="alert"></p>' +
+      '<button type="submit" id="confirm-booking" class="btn-primary w-full">' +
+        'Reserve Spot' +
+      '</button>' +
+    '</form>';
+  }
+
+  function updateUI() {
+    if (!container) return;
+
+    const warnings = getPermitWarnings(selectedPermit);
+    const canSubmit = warnings.length === 0 && !isSubmitting;
+    const price = getPrice(selectedDuration);
+
+    container.querySelectorAll('#duration-buttons button').forEach(function (btn) {
+      const hours = parseInt(btn.dataset.duration, 10);
+      const isSelected = hours === selectedDuration;
+      btn.className = 'duration-btn px-3 py-3 rounded-xl border-2 text-center transition-all duration-200 ' +
+        (isSelected ? 'border-csu-green bg-csu-green/5 text-csu-green' : 'border-gray-200 hover:border-gray-300');
+      btn.setAttribute('aria-pressed', String(isSelected));
+      const priceEl = btn.querySelector('p:last-child');
+      if (priceEl) priceEl.textContent = selectedPermit === PERMIT_TYPES.VISITOR ? '$' + getPrice(hours) : 'Covered';
+    });
+
+    container.querySelectorAll('#permit-buttons button').forEach(function (btn) {
+      const name = btn.dataset.permit;
+      const isSelected = name === selectedPermit;
+      const compatible = isPermitCompatible(name);
+      btn.className = 'permit-btn px-3 py-3 rounded-xl border-2 text-left transition-all duration-200 ' +
+        (isSelected ? 'border-csu-green bg-csu-green/5 text-csu-green' : 'border-gray-200 hover:border-gray-300') +
+        (!compatible ? ' opacity-60' : '');
+      btn.setAttribute('aria-pressed', String(isSelected));
+
+      const priceEl = btn.querySelector('p:last-child');
+      if (priceEl) priceEl.className = 'text-xs font-medium mt-1 ' + (isSelected ? 'text-csu-green' : 'text-gray-700');
+    });
+
+    const priceDisplay = container.querySelector('#price-display');
+    const durationDisplay = container.querySelector('#duration-display');
+    const rateDisplay = container.querySelector('#rate-display');
+    const warningDisplay = container.querySelector('#permit-warning');
+    const noteDisplay = container.querySelector('#permit-note');
+    const submitBtn = container.querySelector('#confirm-booking');
+
+    if (priceDisplay) priceDisplay.textContent = String(price);
+    if (durationDisplay) durationDisplay.textContent = selectedDuration + 'h';
+    if (rateDisplay) rateDisplay.textContent = getRateLabel();
+    if (warningDisplay) warningDisplay.innerHTML = getWarningsHtml();
+    if (noteDisplay) noteDisplay.textContent = getPermitPricingNote();
+
+    if (submitBtn) {
+      submitBtn.disabled = !canSubmit;
+      submitBtn.textContent = isSubmitting
+        ? 'Reserving...'
+        : selectedPermit === PERMIT_TYPES.VISITOR
+          ? 'Reserve Spot • $' + price + ' on-site'
+          : 'Reserve Spot ($0 on-site)';
+    }
+  }
+
+  function clearSubmitError() {
+    if (!container) return;
+    const errorEl = container.querySelector('#booking-error');
+    if (errorEl) {
+      errorEl.textContent = '';
+      errorEl.classList.add('hidden');
+    }
+  }
+
+  function setSubmitError(message) {
+    isSubmitting = false;
+    updateUI();
+    if (!container) return;
+    const errorEl = container.querySelector('#booking-error');
+    if (errorEl) {
+      errorEl.textContent = message;
+      errorEl.classList.remove('hidden');
+      errorEl.setAttribute('tabindex', '-1');
+      errorEl.focus();
+    }
+  }
+
+  function init(el) {
+    container = el;
+
+    container.querySelectorAll('#duration-buttons button').forEach(function (btn) {
+      btn.addEventListener('click', function () {
         selectedDuration = parseInt(btn.dataset.duration, 10);
+        clearSubmitError();
         updateUI();
       });
     });
 
-    container.querySelectorAll('#permit-buttons button').forEach(function(btn) {
-      if (!btn.disabled) {
-        btn.addEventListener('click', function() {
-          selectedPermit = btn.dataset.permit;
-          updateUI();
-        });
-      }
+    container.querySelectorAll('#permit-buttons button').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        selectedPermit = btn.dataset.permit;
+        clearSubmitError();
+        updateUI();
+      });
     });
 
-    var submitBtn = container.querySelector('#confirm-booking');
-    if (submitBtn) {
-      submitBtn.addEventListener('click', function() {
-        if (isSubmitting) return;
-        var vehicleInput = container.querySelector('#vehicle-input');
-        vehicleInfo = vehicleInput ? vehicleInput.value : '';
-
-        isSubmitting = true;
-        submitBtn.disabled = true;
-        submitBtn.textContent = 'Reserving...';
-
-        onSubmit({
-          durationHours: selectedDuration,
-          permitType: selectedPermit,
-          vehicleInfo: vehicleInfo
-        });
+    const vehicleInput = container.querySelector('#vehicle-input');
+    if (vehicleInput) {
+      vehicleInput.addEventListener('input', function () {
+        vehicleInfo = vehicleInput.value;
+        clearSubmitError();
       });
     }
 
-    var backBtn = container.querySelector('[data-action="back"]');
-    if (backBtn) {
-      backBtn.addEventListener('click', function() {
-        window.dispatchEvent(new CustomEvent('booking-back'));
-      });
-    }
+    container.addEventListener('submit', function (event) {
+      event.preventDefault();
+      if (isSubmitting) return;
+      if (getPermitWarnings(selectedPermit).length > 0) return;
 
+      const input = container.querySelector('#vehicle-input');
+      vehicleInfo = input ? input.value : '';
+
+      clearSubmitError();
+      isSubmitting = true;
+      updateUI();
+
+      onSubmit({
+        durationHours: selectedDuration,
+        permitType: selectedPermit,
+        vehicleInfo: vehicleInfo,
+      });
+    });
+
+    updateUI();
+  }
+
+  function resetSubmit() {
+    isSubmitting = false;
     updateUI();
   }
 
   return {
     render: render,
-    init: init
+    init: init,
+    resetSubmit: resetSubmit,
+    setSubmitError: setSubmitError,
   };
 }

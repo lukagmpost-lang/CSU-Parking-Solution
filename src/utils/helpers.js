@@ -2,16 +2,16 @@
  * Utility helpers for the CSU Parking App
  */
 
-const APOSTROPHE_ENTITY = "'";
+const AMP = '&';
 
 export function escapeHtml(text) {
   if (text === null || text === undefined) return '';
   return String(text)
-    .replace(/&/g, '&')
-    .replace(/</g, '<')
-    .replace(/>/g, '>')
-    .replace(/"/g, '"')
-    .replace(/'/g, APOSTROPHE_ENTITY);
+    .replace(/&/g, AMP + 'amp;')
+    .replace(/</g, AMP + 'lt;')
+    .replace(/>/g, AMP + 'gt;')
+    .replace(/"/g, AMP + 'quot;')
+    .replace(/'/g, AMP + '#39;');
 }
 
 export function formatTimeAgo(timestamp) {
@@ -142,6 +142,7 @@ export function formatDurationMinutes(minutes) {
 export function formatTimeRemaining(expiresAt) {
   const remaining = expiresAt - Date.now();
   if (remaining <= 0) return 'Expired';
+  if (remaining < 60 * 1000) return '<1m remaining';
   
   const hours = Math.floor(remaining / (60 * 60 * 1000));
   const minutes = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000));

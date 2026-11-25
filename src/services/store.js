@@ -2,7 +2,7 @@
  * File-based data store with atomic updates
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 export function createStore(filePath) {
@@ -20,7 +20,9 @@ export function createStore(filePath) {
   
   async function writeState(state) {
     await mkdir(dirname(filePath), { recursive: true });
-    await writeFile(filePath, JSON.stringify(state, null, 2));
+    const temporaryPath = filePath + '.' + process.pid + '.tmp';
+    await writeFile(temporaryPath, JSON.stringify(state, null, 2));
+    await rename(temporaryPath, filePath);
   }
   
   function update(mutator) {

@@ -3,7 +3,7 @@
  */
 
 import { ISSUE_TYPES, ALL_FACILITIES, getFacilityById } from '../data/csuParkingData.js';
-import { escapeHtml } from '../utils/helpers.js';
+import { escapeHtml, vibrate } from '../utils/helpers.js';
 import { isInCooldown, getCooldownRemaining, submitReport } from '../services/reportingService.js';
 
 export function ReportModal({ facilityId, onClose, onSubmit }) {
@@ -41,10 +41,10 @@ export function ReportModal({ facilityId, onClose, onSubmit }) {
                 <input type="hidden" name="facilityId" value="${facility.id}">
               </div>
             ` : `
-              <select name="facilityId" class="input-field" required>
+              <select name="facilityId" id="report-facility" class="input-field" aria-label="Parking location" required>
                 <option value="">Select garage or lot...</option>
                 ${ALL_FACILITIES.map(f => `
-                  <option value="${f.id}">${escapeHtml(f.name)} (${escapeHtml(f.shortName)})</option>
+                  <option value="${f.id}">${escapeHtml(f.name)}</option>
                 `).join('')}
               </select>
             `}
@@ -52,22 +52,21 @@ export function ReportModal({ facilityId, onClose, onSubmit }) {
           
           <div>
             <label class="input-label">Issue Type</label>
-            <div class="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Select issue type">
+            <div class="grid grid-cols-2 gap-2" role="group" aria-label="Select issue type">
               ${ISSUE_TYPES.map(type => `
                 <button
                   type="button"
                   data-issue="${type.id}"
-                  class="issue-option p-4 border-2 border-gray-200 rounded-lg text-left hover:border-csu-green/50 transition-colors"
-                  role="radio"
-                  aria-checked="false"
+                  class="issue-option flex flex-col items-start gap-2 p-3 min-h-[104px] border-2 border-gray-200 rounded-xl text-left hover:border-csu-green/50 transition-colors"
+                  aria-pressed="false"
                 >
-                  <div class="flex items-center gap-2 mb-1">
-                    <svg class="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <span class="flex items-center gap-2">
+                    <svg class="w-5 h-5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${getIssueIcon(type.id)}"/>
                     </svg>
-                    <span class="font-medium text-gray-900">${escapeHtml(type.label)}</span>
-                  </div>
-                  <p class="text-xs text-gray-500">${escapeHtml(getIssueDescription(type.id))}</p>
+                    <span class="text-sm font-medium text-gray-900 leading-tight">${escapeHtml(type.label)}</span>
+                  </span>
+                  <span class="text-xs text-gray-500 leading-snug">${escapeHtml(getIssueDescription(type.id))}</span>
                 </button>
               `).join('')}
             </div>
@@ -91,7 +90,7 @@ export function ReportModal({ facilityId, onClose, onSubmit }) {
           </div>
           
           ${cooldown ? `
-            <div class="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <div id="report-cooldown-notice" class="p-3 bg-amber-50 border border-amber-200 rounded-lg">
               <div class="flex items-center gap-2 text-amber-800">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
@@ -102,10 +101,12 @@ export function ReportModal({ facilityId, onClose, onSubmit }) {
           ` : ''}
           
           <div class="pt-2">
+            <p id="report-error" class="text-sm text-red-600 mb-3 hidden" role="alert"></p>
             <button
               type="submit"
               id="submit-report"
               class="btn-primary w-full"
+              data-cooldown="${cooldown ? 'true' : 'false'}"
               ${cooldown ? 'disabled' : ''}
             >
               Submit Report
@@ -125,22 +126,37 @@ export function initReportModal(container, { onClose, onSubmit }) {
   if (!modal) return;
 
   let selectedIssue = null;
+  let isSubmitting = false;
   const noteInput = modal.querySelector('#report-note');
   const charCount = modal.querySelector('#char-count');
   const submitBtn = modal.querySelector('#submit-report');
   const facilityInput = modal.querySelector('input[name="facilityId"], select[name="facilityId"]');
   const issueInput = modal.querySelector('#selected-issue');
+  const errorEl = modal.querySelector('#report-error');
+
+  function showError(message) {
+    if (!errorEl) return;
+    errorEl.textContent = message;
+    errorEl.classList.remove('hidden');
+  }
+
+  function clearError() {
+    if (!errorEl) return;
+    errorEl.textContent = '';
+    errorEl.classList.add('hidden');
+  }
 
   modal.querySelectorAll('[data-issue]').forEach(btn => {
     btn.addEventListener('click', () => {
       selectedIssue = btn.dataset.issue;
       modal.querySelectorAll('[data-issue]').forEach(b => {
         b.classList.remove('border-csu-green', 'bg-csu-green/5');
-        b.setAttribute('aria-checked', 'false');
+        b.setAttribute('aria-pressed', 'false');
       });
       btn.classList.add('border-csu-green', 'bg-csu-green/5');
-      btn.setAttribute('aria-checked', 'true');
+      btn.setAttribute('aria-pressed', 'true');
       issueInput.value = selectedIssue;
+      clearError();
       updateSubmitButton();
     });
   });
@@ -152,28 +168,48 @@ export function initReportModal(container, { onClose, onSubmit }) {
   const form = modal.querySelector('#report-form');
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (!selectedIssue) return;
+    if (isSubmitting) return;
+
+    if (!selectedIssue) {
+      showError('Choose an issue type first.');
+      return;
+    }
 
     const facilityId = facilityInput.value;
     const note = noteInput.value.trim();
 
+    if (!facilityId) {
+      showError('Choose a parking location first.');
+      return;
+    }
+
+    clearError();
+    isSubmitting = true;
     submitBtn.disabled = true;
     submitBtn.textContent = 'Submitting...';
 
-    const result = await submitReport({ facilityId, issueType: selectedIssue, note });
+    try {
+      const result = await submitReport({ facilityId, issueType: selectedIssue, note });
 
-    if (result.success) {
-      vibrate([50, 50, 50]);
-      onSubmit();
-    } else {
-      submitBtn.disabled = false;
-      submitBtn.textContent = 'Submit Report';
-      alert(result.error || 'Failed to submit report');
+      if (result.success) {
+        vibrate([50, 50, 50]);
+        onSubmit();
+      } else {
+        showError(result.error || 'Could not submit your report. Try again.');
+      }
+    } catch (error) {
+      showError('This browser could not save your report. Check storage settings and try again.');
+    } finally {
+      isSubmitting = false;
+      if (modal.isConnected) {
+        submitBtn.textContent = 'Submit Report';
+        updateSubmitButton();
+      }
     }
   });
 
   function updateSubmitButton() {
-    submitBtn.disabled = !selectedIssue || submitBtn.hasAttribute('disabled');
+    submitBtn.disabled = isSubmitting || !selectedIssue || isInCooldown();
   }
 
   modal.querySelectorAll('[data-modal-close="report"]').forEach(btn => {
@@ -185,12 +221,23 @@ export function initReportModal(container, { onClose, onSubmit }) {
   });
 
   updateSubmitButton();
+
+  const cooldownRemaining = getCooldownRemaining();
+  if (cooldownRemaining > 0) {
+    setTimeout(function () {
+      if (!modal.isConnected) return;
+      submitBtn.dataset.cooldown = 'false';
+      const cooldownNotice = modal.querySelector('#report-cooldown-notice');
+      if (cooldownNotice) cooldownNotice.remove();
+      updateSubmitButton();
+    }, cooldownRemaining + 50);
+  }
 }
 
 function getIssueIcon(issueId) {
   const icons = {
     lot_full: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z',
-    gate_broken: 'M10 19l-7-7m0 0l7-7m-7 7h18',
+    gate_broken: 'M4 7h16M6 7v10M18 7v10M4 17h16',
     blocked_space: 'M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z',
     pay_station_down: 'M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2h2',
     event_closure: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z',
