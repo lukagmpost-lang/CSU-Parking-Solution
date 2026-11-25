@@ -3,7 +3,7 @@
  */
 
 import { ALL_FACILITIES, getFacilityById } from '../data/csuParkingData.js';
-import { escapeHtml } from '../utils/helpers.js';
+import { escapeHtml, formatDurationMinutes } from '../utils/helpers.js';
 import { vibrate } from '../utils/helpers.js';
 import { saveSpot, getSavedSpot } from '../services/spotSaverService.js';
 
@@ -11,7 +11,7 @@ export function SpotSaverModal({ facilityId, onClose, onSave }) {
   const facility = facilityId ? getFacilityById(facilityId) : null;
   const existingSpot = getSavedSpot();
   const isEditing = !!existingSpot;
-  
+
   const defaultFacility = facility || (existingSpot ? getFacilityById(existingSpot.facilityId) : ALL_FACILITIES[0]);
   const defaultFloor = existingSpot?.floor || '';
   const defaultRow = existingSpot?.row || '';
@@ -19,7 +19,7 @@ export function SpotSaverModal({ facilityId, onClose, onSave }) {
   const defaultNotes = existingSpot?.notes || '';
   const defaultTimer = existingSpot?.timer ? true : false;
   const defaultDuration = existingSpot?.timer ? Math.round(existingSpot.timer.duration / 60000) : 120;
-  
+
   return `
     <div class="modal-overlay" data-modal="spot-saver" role="dialog" aria-modal="true" aria-labelledby="spot-saver-title">
       <div class="modal-content animate-slide-up max-w-md">
@@ -150,7 +150,7 @@ export function SpotSaverModal({ facilityId, onClose, onSave }) {
                   </button>
                 </div>
                 <p class="text-xs text-gray-500 mt-1 text-center" id="duration-display">
-                  ${formatDuration(defaultDuration)}
+                  ${formatDurationMinutes(defaultDuration)}
                 </p>
               </div>
               
@@ -161,7 +161,7 @@ export function SpotSaverModal({ facilityId, onClose, onSave }) {
                     class="filter-chip flex-1 ${defaultDuration === min ? 'filter-chip-active' : ''}"
                     data-quick-duration="${min}"
                   >
-                    ${formatDuration(min)}
+                    ${formatDurationMinutes(min)}
                   </button>
                 `).join('')}
               </div>
@@ -171,7 +171,7 @@ export function SpotSaverModal({ facilityId, onClose, onSave }) {
           <div class="pt-2">
             <button
               type="submit"
-              class="btn-primary"
+              class="btn-primary w-full"
             >
               ${isEditing ? 'Update Spot' : 'Save Spot'}
             </button>
@@ -179,98 +179,84 @@ export function SpotSaverModal({ facilityId, onClose, onSave }) {
         </form>
       </div>
     </div>
-    
-    <script>
-      (function() {
-        const modal = document.querySelector('[data-modal="spot-saver"]');
-        if (!modal) return;
-        
-        const form = modal.querySelector('#spot-saver-form');
-        const timerToggle = modal.querySelector('#timer-toggle');
-        const timerOptions = modal.querySelector('#timer-options');
-        const durationInput = modal.querySelector('#duration-input');
-        const durationDisplay = modal.querySelector('#duration-display');
-        
-        timerToggle.addEventListener('change', () => {
-          timerOptions.classList.toggle('hidden', !timerToggle.checked);
-        });
-        
-        modal.querySelectorAll('[data-timer-adjust]').forEach(btn => {
-          btn.addEventListener('click', () => {
-            const adjust = parseInt(btn.dataset.timerAdjust, 10);
-            let newVal = parseInt(durationInput.value, 10) + adjust;
-            newVal = Math.max(15, Math.min(720, newVal));
-            newVal = Math.round(newVal / 15) * 15;
-            durationInput.value = newVal;
-            updateDurationDisplay();
-          });
-        });
-        
-        modal.querySelectorAll('[data-quick-duration]').forEach(btn => {
-          btn.addEventListener('click', () => {
-            const val = parseInt(btn.dataset.quickDuration, 10);
-            durationInput.value = val;
-            updateDurationDisplay();
-            modal.querySelectorAll('[data-quick-duration]').forEach(b => {
-              b.classList.toggle('filter-chip-active', parseInt(b.dataset.quickDuration, 10) === val);
-            });
-          });
-        });
-        
-        durationInput.addEventListener('input', updateDurationDisplay);
-        
-        function updateDurationDisplay() {
-          const val = parseInt(durationInput.value, 10) || 0;
-          durationDisplay.textContent = formatDuration(val);
-        }
-        
-        function formatDuration(minutes) {
-          const hours = Math.floor(minutes / 60);
-          const mins = minutes % 60;
-          if (hours > 0 && mins > 0) return hours + 'h ' + mins + 'm';
-          if (hours > 0) return hours + 'h';
-          return mins + 'm';
-        }
-        
-        form.addEventListener('submit', async (e) => {
-          e.preventDefault();
-          
-          const formData = new FormData(form);
-          const facilityId = formData.get('facilityId');
-          const floor = formData.get('floor') || null;
-          const row = formData.get('row') || null;
-          const spot = formData.get('spot') || null;
-          const notes = formData.get('notes') || '';
-          const startTimer = timerToggle.checked;
-          const durationMinutes = startTimer ? parseInt(durationInput.value, 10) : 0;
-          
-          const submitBtn = form.querySelector('button[type="submit"]');
-          submitBtn.disabled = true;
-          submitBtn.textContent = 'Saving...';
-          
-          try {
-            saveSpot({ facilityId, floor, row, spot, notes, startTimer, durationMinutes });
-            vibrate([50, 50]);
-            onSave();
-          } catch (error) {
-            submitBtn.disabled = false;
-            submitBtn.textContent = isEditing ? 'Update Spot' : 'Save Spot';
-            alert('Failed to save spot');
-          }
-        });
-        
-        modal.addEventListener('click', (e) => {
-          if (e.target === modal) onClose();
-        });
-      })();
-    </script>
   `;
 }
 
-function formatDuration(minutes) {
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  if (hours > 0 && mins > 0) return hours + 'h ' + mins + 'm';
-  if (hours > 0) return hours + 'h';
-  return mins + 'm';
+export function initSpotSaverModal(container, { onClose, onSave }) {
+  const modal = container.querySelector('[data-modal="spot-saver"]');
+  if (!modal) return;
+
+  const form = modal.querySelector('#spot-saver-form');
+  const timerToggle = modal.querySelector('#timer-toggle');
+  const timerOptions = modal.querySelector('#timer-options');
+  const durationInput = modal.querySelector('#duration-input');
+  const durationDisplay = modal.querySelector('#duration-display');
+
+  timerToggle.addEventListener('change', () => {
+    timerOptions.classList.toggle('hidden', !timerToggle.checked);
+  });
+
+  modal.querySelectorAll('[data-timer-adjust]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const adjust = parseInt(btn.dataset.timerAdjust, 10);
+      let newVal = parseInt(durationInput.value, 10) + adjust;
+      newVal = Math.max(15, Math.min(720, newVal));
+      newVal = Math.round(newVal / 15) * 15;
+      durationInput.value = newVal;
+      updateDurationDisplay();
+    });
+  });
+
+  modal.querySelectorAll('[data-quick-duration]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const val = parseInt(btn.dataset.quickDuration, 10);
+      durationInput.value = val;
+      updateDurationDisplay();
+      modal.querySelectorAll('[data-quick-duration]').forEach(b => {
+        b.classList.toggle('filter-chip-active', parseInt(b.dataset.quickDuration, 10) === val);
+      });
+    });
+  });
+
+  durationInput.addEventListener('input', updateDurationDisplay);
+
+  function updateDurationDisplay() {
+    const val = parseInt(durationInput.value, 10) || 0;
+    durationDisplay.textContent = formatDurationMinutes(val);
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const formData = new FormData(form);
+    const facilityId = formData.get('facilityId');
+    const floor = formData.get('floor') || null;
+    const row = formData.get('row') || null;
+    const spot = formData.get('spot') || null;
+    const notes = formData.get('notes') || '';
+    const startTimer = timerToggle.checked;
+    const durationMinutes = startTimer ? parseInt(durationInput.value, 10) : 0;
+
+    const submitBtn = form.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Saving...';
+
+    try {
+      saveSpot({ facilityId, floor, row, spot, notes, startTimer, durationMinutes });
+      vibrate([50, 50]);
+      onSave();
+    } catch (error) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = isEditing ? 'Update Spot' : 'Save Spot';
+      alert('Failed to save spot');
+    }
+  });
+
+  modal.querySelectorAll('[data-modal-close="spot-saver"]').forEach(btn => {
+    btn.addEventListener('click', onClose);
+  });
+
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) onClose();
+  });
 }

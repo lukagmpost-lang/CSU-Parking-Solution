@@ -10,7 +10,7 @@ export function MapView({
   activeReports,
   onDirectionsClick,
   onReportClick,
-  onSaveSpotClick,
+  onOpenFacility,
 }) {
   const coords = facilities.map(f => f.coordinates).filter(Boolean);
   const hasCoords = coords.length > 0;
@@ -19,19 +19,12 @@ export function MapView({
     <div class="h-[calc(100vh-280px)] min-h-[400px] relative">
       <div id="map-container" class="absolute inset-0 bg-gray-200 relative">
         ${hasCoords ? `
-          <img 
-            src="https://maps.googleapis.com/maps/api/staticmap?center=41.501,-81.674&zoom=16&size=640x640&maptype=roadmap&style=feature:poi|visibility:off&style=feature:transit|visibility:off&key=YOUR_API_KEY"
-            alt="CSU Campus Parking Map"
-            class="w-full h-full object-cover"
-            onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';"
-          />
-          <div class="w-full h-full flex items-center justify-center bg-gray-100 hidden" id="map-fallback">
+          <div class="w-full h-full flex items-center justify-center bg-gray-100" id="map-fallback">
             <div class="text-center p-4">
               <svg class="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z"/>
               </svg>
-              <p class="text-gray-500">Map view requires API key</p>
-              <p class="text-xs text-gray-400 mt-1">Showing facility pins below</p>
+              <p class="text-gray-500">Map view - showing facility pins below</p>
             </div>
           </div>
           
@@ -41,6 +34,7 @@ export function MapView({
               const formatted = avail ? formatAvailabilityForPin(avail) : null;
               const variant = formatted ? getStatusBadgeVariant(formatted.status) : 'gray';
               const hasReports = activeReports[facility.id]?.length > 0;
+              const canBook = !formatted || (formatted.type === 'garage' ? formatted.spacesAvailable > 0 : formatted.status !== 'Full' && formatted.status !== 'Closed');
               
               const pos = calculatePinPosition(facility.coordinates, facilities);
               
@@ -52,7 +46,7 @@ export function MapView({
                   style="left: ${pos.x}%; top: ${pos.y}%; z-index: ${10 + index}"
                   aria-label="${escapeHtml(facility.name)} - ${formatted ? formatted.text : 'Loading'}"
                 >
-                  <div class="pin-marker pin-${variant} ${hasReports ? 'pin-has-report' : ''}">
+                  <div class="pin-marker pin-${variant} ${hasReports ? 'pin-has-report' : ''} ${!canBook ? 'pin-full' : ''}">
                     <span class="pin-label">${escapeHtml(facility.shortName)}</span>
                     ${hasReports ? '<span class="pin-report-dot"></span>' : ''}
                   </div>
@@ -60,10 +54,12 @@ export function MapView({
                     <div class="pin-tooltip-content">
                       <p class="font-semibold text-gray-900">${escapeHtml(facility.name)}</p>
                       <p class="text-xs text-gray-500">${formatted ? formatted.text : 'Loading...'}</p>
-                      <div class="flex gap-2 mt-2 pt-2 border-t border-gray-100">
-                        <button data-directions="${facility.id}" class="pin-btn">Directions</button>
+                      <div class="flex flex-col gap-1.5 mt-2 pt-2 border-t border-gray-100">
+                        <button data-directions="${facility.id}" class="pin-btn pin-btn-ghost">Directions</button>
                         <button data-report="${facility.id}" class="pin-btn pin-btn-warning">Report</button>
-                        <button data-save-spot="${facility.id}" class="pin-btn pin-btn-primary">Save Spot</button>
+                        <button data-open-facility="${facility.id}" class="pin-btn pin-btn-primary ${!canBook ? 'opacity-50 cursor-not-allowed' : ''}" ${!canBook ? 'disabled' : ''}>
+                          ${canBook ? 'Reserve' : 'Full'}
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -141,6 +137,7 @@ export function MapView({
       .pin-amber { background: #F59E0B; }
       .pin-crimson { background: #DC2626; }
       .pin-gray { background: #9CA3AF; }
+      .pin-full { opacity: 0.5; filter: grayscale(1); }
       
       .pin-label {
         transform: rotate(45deg);
@@ -216,30 +213,51 @@ export function MapView({
       }
       
       .pin-btn {
-        flex: 1;
-        padding: 6px 8px;
+        padding: 6px 10px;
         font-size: 11px;
         font-weight: 600;
         border-radius: 6px;
         text-align: center;
+        border: 1px solid;
+        transition: all 150ms ease;
+      }
+      
+      .pin-btn-ghost {
+        background: white;
+        color: #374151;
+        border-color: #D1D5DB;
+      }
+      
+      .pin-btn-ghost:hover {
+        background: #F3F4F6;
+        border-color: #9CA3AF;
       }
       
       .pin-btn-warning {
         background: #FEF3C7;
         color: #92400E;
-        border: 1px solid #FCD34D;
+        border-color: #FCD34D;
+      }
+      
+      .pin-btn-warning:hover {
+        background: #FDE68A;
       }
       
       .pin-btn-primary {
         background: #006A4E;
         color: white;
-        border: 1px solid #006A4E;
+        border-color: #006A4E;
       }
       
-      .pin-btn:not(.pin-btn-warning):not(.pin-btn-primary) {
-        background: #F3F4F6;
-        color: #374151;
-        border: 1px solid #D1D5DB;
+      .pin-btn-primary:hover:not(:disabled) {
+        background: #00523B;
+      }
+      
+      .pin-btn-primary:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        background: #9CA3AF;
+        border-color: #D1D5DB;
       }
     </style>
   `;

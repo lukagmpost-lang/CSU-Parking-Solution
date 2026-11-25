@@ -2,7 +2,7 @@
  * Service Worker for CSU Parking - Offline Support
  */
 
-const CACHE_NAME = 'csu-parking-v1';
+const CACHE_NAME = 'csu-parking-v8';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -37,11 +37,19 @@ self.addEventListener('fetch', (event) => {
   
   if (request.method !== 'GET') return;
   
+  // API requests: network first, cache fallback
   if (url.pathname.startsWith('/api/')) {
     event.respondWith(networkFirst(request));
     return;
   }
   
+  // Navigation requests: network first for fresh HTML
+  if (request.mode === 'navigate') {
+    event.respondWith(networkFirst(request));
+    return;
+  }
+  
+  // Static assets: cache first
   event.respondWith(cacheFirst(request));
 });
 
@@ -75,6 +83,9 @@ async function networkFirst(request) {
   } catch {
     const cached = await caches.match(request);
     if (cached) return cached;
+    if (request.mode === 'navigate') {
+      return caches.match('/index.html');
+    }
     return new Response(JSON.stringify({ error: 'Offline', offline: true }), {
       status: 503,
       headers: { 'Content-Type': 'application/json' },

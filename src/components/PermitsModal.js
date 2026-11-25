@@ -5,6 +5,42 @@
 import { PERMIT_TYPES, PERMIT_PRICING, EXTERNAL_LINKS } from '../data/csuParkingData.js';
 import { escapeHtml } from '../utils/helpers.js';
 
+const PERMIT_COLOR_CLASSES = {
+  Green: 'bg-emerald-500',
+  White: 'bg-gray-500',
+  Evening: 'bg-amber-500',
+  Night: 'bg-violet-500',
+  ADA: 'bg-red-500',
+  Visitor: 'bg-blue-500',
+};
+
+const PERMIT_BG_CLASSES = {
+  Green: 'bg-emerald-50',
+  White: 'bg-gray-50',
+  Evening: 'bg-amber-50',
+  Night: 'bg-violet-50',
+  ADA: 'bg-red-50',
+  Visitor: 'bg-blue-50',
+};
+
+const PERMIT_TEXT_CLASSES = {
+  Green: 'text-emerald-700',
+  White: 'text-gray-700',
+  Evening: 'text-amber-700',
+  Night: 'text-violet-700',
+  ADA: 'text-red-700',
+  Visitor: 'text-blue-700',
+};
+
+const PERMIT_BORDER_CLASSES = {
+  Green: 'border-emerald-200',
+  White: 'border-gray-200',
+  Evening: 'border-amber-200',
+  Night: 'border-violet-200',
+  ADA: 'border-red-200',
+  Visitor: 'border-blue-200',
+};
+
 export function PermitsModal({ onClose }) {
   return `
     <div class="modal-overlay" data-modal="permits" role="dialog" aria-modal="true" aria-labelledby="permits-title">
@@ -29,20 +65,26 @@ export function PermitsModal({ onClose }) {
           <div>
             <h3 class="text-sm font-semibold text-gray-900 mb-4">Semester Permit Rates</h3>
             <div class="space-y-3">
-              ${Object.entries(PERMIT_PRICING).filter(([key]) => key !== PERMIT_TYPES.VISITOR).map(([key, permit]) => `
-                <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                  <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 rounded-lg flex items-center justify-center" style="background: ${getPermitColor(key)}20;">
-                      <div class="w-5 h-5 rounded" style="background: ${getPermitColor(key)};"></div>
+              ${Object.entries(PERMIT_PRICING).filter(([key]) => key !== PERMIT_TYPES.VISITOR).map(([key, permit]) => {
+                const color = PERMIT_COLOR_CLASSES[key] || 'bg-gray-500';
+                const bgColor = PERMIT_BG_CLASSES[key] || 'bg-gray-50';
+                const textColor = PERMIT_TEXT_CLASSES[key] || 'text-gray-700';
+                const borderColor = PERMIT_BORDER_CLASSES[key] || 'border-gray-200';
+                return `
+                  <div class="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                    <div class="flex items-center gap-3">
+                      <div class="w-10 h-10 rounded-lg flex items-center justify-center ${bgColor} border ${borderColor}">
+                        <div class="w-5 h-5 rounded ${color}"></div>
+                      </div>
+                      <div>
+                        <p class="font-medium text-gray-900">${escapeHtml(permit.name)}</p>
+                        <p class="text-xs text-gray-500">Per ${permit.period}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p class="font-medium text-gray-900">${escapeHtml(permit.name)}</p>
-                      <p class="text-xs text-gray-500">Per ${permit.period}</p>
-                    </div>
+                    <span class="text-lg font-bold text-csu-green">$${permit.price}</span>
                   </div>
-                  <span class="text-lg font-bold text-csu-green">$${permit.price}</span>
-                </div>
-              `).join('')}
+                `;
+              }).join('')}
             </div>
           </div>
           
@@ -118,16 +160,4 @@ export function PermitsModal({ onClose }) {
       </div>
     </div>
   `;
-}
-
-function getPermitColor(permitType) {
-  const colors = {
-    Green: '#006A4E',
-    White: '#6B7280',
-    Evening: '#F59E0B',
-    Night: '#8B5CF6',
-    ADA: '#DC2626',
-    Visitor: '#3B82F6',
-  };
-  return colors[permitType] || '#6B7280';
 }

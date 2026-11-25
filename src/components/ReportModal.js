@@ -3,7 +3,7 @@
  */
 
 import { ISSUE_TYPES, ALL_FACILITIES, getFacilityById } from '../data/csuParkingData.js';
-import { escapeHtml, vibrate, formatNumber } from '../utils/helpers.js';
+import { escapeHtml } from '../utils/helpers.js';
 import { isInCooldown, getCooldownRemaining, submitReport } from '../services/reportingService.js';
 
 export function ReportModal({ facilityId, onClose, onSubmit }) {
@@ -11,7 +11,7 @@ export function ReportModal({ facilityId, onClose, onSubmit }) {
   const cooldown = isInCooldown();
   const cooldownMs = getCooldownRemaining();
   const cooldownMinutes = Math.ceil(cooldownMs / 60000);
-  
+
   return `
     <div class="modal-overlay" data-modal="report" role="dialog" aria-modal="true" aria-labelledby="report-title">
       <div class="modal-content animate-slide-up max-w-md">
@@ -31,7 +31,7 @@ export function ReportModal({ facilityId, onClose, onSubmit }) {
           </button>
         </div>
         
-        <div class="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+        <form id="report-form" class="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
           <div>
             <label class="input-label">Location</label>
             ${facility ? `
@@ -67,7 +67,7 @@ export function ReportModal({ facilityId, onClose, onSubmit }) {
                     </svg>
                     <span class="font-medium text-gray-900">${escapeHtml(type.label)}</span>
                   </div>
-                  <p class="text-xs text-gray-500">${getIssueDescription(type.id)}</p>
+                  <p class="text-xs text-gray-500">${escapeHtml(getIssueDescription(type.id))}</p>
                 </button>
               `).join('')}
             </div>
@@ -103,9 +103,9 @@ export function ReportModal({ facilityId, onClose, onSubmit }) {
           
           <div class="pt-2">
             <button
-              type="button"
+              type="submit"
               id="submit-report"
-              class="btn-primary"
+              class="btn-primary w-full"
               ${cooldown ? 'disabled' : ''}
             >
               Submit Report
@@ -114,69 +114,77 @@ export function ReportModal({ facilityId, onClose, onSubmit }) {
               Anonymous \u2022 No login required \u2022 Reports expire after 60 minutes
             </p>
           </div>
-        </div>
+        </form>
       </div>
     </div>
-    
-    <script>
-      (function() {
-        const modal = document.querySelector('[data-modal="report"]');
-        if (!modal) return;
-        
-        let selectedIssue = null;
-        const noteInput = modal.querySelector('#report-note');
-        const charCount = modal.querySelector('#char-count');
-        const submitBtn = modal.querySelector('#submit-report');
-        const facilityInput = modal.querySelector('input[name="facilityId"], select[name="facilityId"]');
-        const issueInput = modal.querySelector('#selected-issue');
-        
-        modal.querySelectorAll('[data-issue]').forEach(btn => {
-          btn.addEventListener('click', () => {
-            selectedIssue = btn.dataset.issue;
-            modal.querySelectorAll('[data-issue]').forEach(b => {
-              b.classList.remove('border-csu-green', 'bg-csu-green/5');
-              b.setAttribute('aria-checked', 'false');
-            });
-            btn.classList.add('border-csu-green', 'bg-csu-green/5');
-            btn.setAttribute('aria-checked', 'true');
-            issueInput.value = selectedIssue;
-            updateSubmitButton();
-          });
-        });
-        
-        noteInput.addEventListener('input', () => {
-          charCount.textContent = noteInput.value.length + '/140';
-        });
-        
-        submitBtn.addEventListener('click', async () => {
-          if (!selectedIssue) return;
-          
-          const facilityId = facilityInput.value;
-          const note = noteInput.value.trim();
-          
-          submitBtn.disabled = true;
-          submitBtn.textContent = 'Submitting...';
-          
-          const result = await submitReport({ facilityId, issueType: selectedIssue, note });
-          
-          if (result.success) {
-            vibrate([50, 50, 50]);
-            onSubmit();
-          } else {
-            submitBtn.disabled = false;
-            submitBtn.textContent = 'Submit Report';
-            alert(result.error || 'Failed to submit report');
-          }
-        });
-        
-        function updateSubmitButton() {
-          submitBtn.disabled = !selectedIssue || ${cooldown};
-        }
-        
-        updateSubmitButton();
-      })();
-    </script>
   `;
+}
+
+export function initReportModal(container, { onClose, onSubmit }) {
+  const modal = container.querySelector('[data-modal="report"]');
+  if (!modal) return;
+
+  let selectedIssue = null;
+  const noteInput = modal.querySelector('#report-note');
+  const charCount = modal.querySelector('#char-count');
+  const submitBtn = modal.querySelector('#submit-report');
+  const facilityInput = modal.querySelector('input[name="facilityId"], select[name="facilityId"]');
+  const issueInput = modal.querySelector('#selected-issue');
+
+  modal.querySelectorAll('[data-issue]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      selectedIssue = btn.dataset.issue;
+      modal.querySelectorAll('[data-issue]').forEach(b => {
+        b.classList.remove('border-csu-green', 'bg-csu-green/5');
+        b.setAttribute('aria-checked', 'false');
+      });
+      btn.classList.add('border-csu-green', 'bg-csu-green/5');
+      btn.setAttribute('aria-checked', 'true');
+      issueInput.value = selectedIssue;
+      updateSubmitButton();
+    });
+  });
+
+  noteInput.addEventListener('input', () => {
+    charCount.textContent = noteInput.value.length + '/140';
+  });
+
+  const form = modal.querySelector('#report-form');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!selectedIssue) return;
+
+    const facilityId = facilityInput.value;
+    const note = noteInput.value.trim();
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting...';
+
+    const result = await submitReport({ facilityId, issueType: selectedIssue, note });
+
+    if (result.success) {
+      vibrate([50, 50, 50]);
+      onSubmit();
+    } else {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit Report';
+      alert(result.error || 'Failed to submit report');
+    }
+  });
+
+  function updateSubmitButton() {
+    submitBtn.disabled = !selectedIssue || submitBtn.hasAttribute('disabled');
+  }
+
+  modal.querySelectorAll('[data-modal-close="report"]').forEach(btn => {
+    btn.addEventListener('click', onClose);
+  });
+
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) onClose();
+  });
+
+  updateSubmitButton();
 }
 
 function getIssueIcon(issueId) {

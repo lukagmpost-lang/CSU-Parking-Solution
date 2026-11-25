@@ -3,6 +3,7 @@
  */
 
 import { GATED_GARAGES, SURFACE_LOTS, STATUS_TYPES } from '../data/csuParkingData.js';
+import { getAllBookings } from './bookingService.js';
 
 let availabilityCache = new Map();
 let subscribers = new Set();
@@ -96,15 +97,30 @@ function simulateSurfaceLotStatus(lot) {
   return state.status;
 }
 
+function getActiveReservationsCount(facilityId) {
+  const bookings = getAllBookings();
+  const now = Date.now();
+  return bookings.filter(b => 
+    b.facilityId === facilityId && 
+    b.status === 'active' && 
+    b.expiresAt > now
+  ).length;
+}
+
 async function fetchLiveGarageData() {
   const results = {};
   
   for (const garage of GATED_GARAGES) {
     try {
-      results[garage.id] = simulateGarageAvailability(garage);
+      const rawSpaces = simulateGarageAvailability(garage);
+      const activeReservations = getActiveReservationsCount(garage.id);
+      const availableSpaces = Math.max(0, rawSpaces - activeReservations);
+      results[garage.id] = availableSpaces;
     } catch (error) {
       console.warn('Failed to fetch live data for ' + garage.id + ', using simulator:', error);
-      results[garage.id] = simulateGarageAvailability(garage);
+      const rawSpaces = simulateGarageAvailability(garage);
+      const activeReservations = getActiveReservationsCount(garage.id);
+      results[garage.id] = Math.max(0, rawSpaces - activeReservations);
     }
   }
   
@@ -133,16 +149,20 @@ async function refreshAvailability() {
     Object.entries(garageData).forEach(([id, spaces]) => {
       const garage = GATED_GARAGES.find(g => g.id === id);
       if (garage) {
+        const activeReservations = getActiveReservationsCount(id);
+        const rawSpaces = spaces + activeReservations;
+        const percentage = Math.round((spaces / garage.maxCapacity) * 100);
         availabilityCache.set(id, {
           type: 'garage',
           facilityId: id,
           spacesAvailable: spaces,
           maxCapacity: garage.maxCapacity,
-          percentage: Math.round((spaces / garage.maxCapacity) * 100),
+          percentage,
           status: spaces > garage.maxCapacity * 0.2 ? STATUS_TYPES.OPEN : 
                   spaces > 0 ? STATUS_TYPES.FILLING_FAST : STATUS_TYPES.FULL,
           lastUpdated: timestamp,
           isLive: true,
+          activeReservations,
         });
       }
     });
@@ -150,12 +170,15 @@ async function refreshAvailability() {
     Object.entries(surfaceData).forEach(([id, status]) => {
       const lot = SURFACE_LOTS.find(l => l.id === id);
       if (lot) {
+        const state = simulatorState.get(id);
+        const reportCount = state ? state.reportCount : 0;
         availabilityCache.set(id, {
           type: 'surface',
           facilityId: id,
           status,
           lastUpdated: timestamp,
           isLive: false,
+          reportCount,
         });
       }
     });
@@ -221,7 +244,14 @@ export function getFacilityAvailability(facilityId) {
 }
 
 export function formatAvailability(availability) {
-  if (!availability) return { text: 'Unknown', status: STATUS_TYPES.OPEN };
+  if (!availability) return { 
+    text: 'Unknown', 
+    status: STATUS_TYPES.OPEN,
+    type: 'unknown',
+    spacesAvailable: 0,
+    maxCapacity: 0,
+    percentage: 0,
+  };
   
   if (availability.type === 'garage') {
     const { spacesAvailable, maxCapacity, percentage } = availability;
@@ -232,6 +262,10 @@ export function formatAvailability(availability) {
       status: availability.status,
       isLive: availability.isLive,
       lastUpdated: availability.lastUpdated,
+      type: 'garage',
+      spacesAvailable,
+      maxCapacity,
+      activeReservations: availability.activeReservations || 0,
     };
   } else {
     return {
@@ -240,6 +274,10 @@ export function formatAvailability(availability) {
       isLive: availability.isLive,
       lastUpdated: availability.lastUpdated,
       reportCount: availability.reportCount,
+      type: 'surface',
+      spacesAvailable: availability.status === STATUS_TYPES.FULL ? 0 : Math.floor(Math.random() * 20) + 1,
+      maxCapacity: 0,
+      percentage: availability.status === STATUS_TYPES.FULL ? 0 : 50,
     };
   }
 }

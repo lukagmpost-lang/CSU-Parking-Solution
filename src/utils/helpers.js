@@ -2,9 +2,10 @@
  * Utility helpers for the CSU Parking App
  */
 
-const APOSTROPHE_ENTITY = String.fromCharCode(39) + '#39;';
+const APOSTROPHE_ENTITY = "'";
 
 export function escapeHtml(text) {
+  if (text === null || text === undefined) return '';
   return String(text)
     .replace(/&/g, '&')
     .replace(/</g, '<')
@@ -122,4 +123,29 @@ export function onOnlineStatusChange(callback) {
     window.removeEventListener('online', handler);
     window.removeEventListener('offline', handler);
   };
+}
+
+export function formatDuration(hours) {
+  if (hours === 1) return '1 Hour';
+  if (hours < 24) return hours + ' Hours';
+  return '24 Hours';
+}
+
+export function formatDurationMinutes(minutes) {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours > 0 && mins > 0) return hours + 'h ' + mins + 'm';
+  if (hours > 0) return hours + 'h';
+  return mins + 'm';
+}
+
+export function formatTimeRemaining(expiresAt) {
+  const remaining = expiresAt - Date.now();
+  if (remaining <= 0) return 'Expired';
+  
+  const hours = Math.floor(remaining / (60 * 60 * 1000));
+  const minutes = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000));
+  
+  if (hours > 0) return hours + 'h ' + minutes + 'm remaining';
+  return minutes + 'm remaining';
 }
